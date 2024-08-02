@@ -1,0 +1,696 @@
+---
+title: "senomiR_aging_cohort"
+output: html_document
+date: "2023-05-29"
+---
+
+```{r load libraries, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#load packages
+library(ggrepel)
+library(psych)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(ggvenn)
+library(gridExtra)
+library(dplyr)
+library(cowplot)
+library(PerformanceAnalytics)
+library(stringr)
+library(scales)
+library(ComplexHeatmap)
+library(forcats)
+library(vctrs)
+
+```
+
+```{r load data, include=FALSE}
+#load data
+data_tissue <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/220224_BU2_tissue_ngs_data_rpm.txt", header = TRUE, sep = "\t", dec = ".")
+spike_ins <- c("X.C", "X.E", "X.H", "X.I", "X.K", "X.M", "X.N", "X.uniSp.2", "X.uniSp.4", "X.uniSp.5")
+data_tissue <- data_tissue[, !names(data_tissue) %in% spike_ins]
+data_tissue$SampleID <- as.factor(data_tissue$SampleID)
+data_tissue$SampleID <- gsub("[A-Z]", "", data_tissue$SampleID)
+data_tissue$SampleID <- gsub("_", "", data_tissue$SampleID)
+data_tissue$Tissue <- as.factor(data_tissue$Tissue)
+data_tissue$Group <- as.factor(data_tissue$Group)
+
+# IMPORT TISSUE qPCR DATA NGS SUBSET
+data_qPCR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/05-CIRCULATION-TISSUE-COR/tissue_qPCR_data_all.txt", header = TRUE, sep = "\t", dec = ".") 
+data_qPCR <- transform(data_qPCR, 
+                       SampleID = factor(SampleID), 
+                       Tissue = factor(toupper(data_qPCR$Tissue)), 
+                       Group = factor(Group))
+
+smallRNAseq_sub <- na.omit(data_qPCR[data_qPCR$Tissue == "BRAIN",])
+ngs_samples <- smallRNAseq_sub$SampleID
+data_qPCR <- data_qPCR[data_qPCR$SampleID %in% ngs_samples,]
+
+
+
+#load RAW data
+data_tissue_raw <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/220224_BU2_tissue_ngs_data_raw.txt", header = TRUE, sep = "\t", dec = ".")
+data_tissue_raw <- data_tissue_raw[, !names(data_tissue_raw) %in% spike_ins]
+
+#assign factors RAW
+data_tissue_raw$SampleID <- as.factor(data_tissue_raw$SampleID)
+data_tissue_raw$Tissue <- as.factor(data_tissue_raw$Tissue)
+data_tissue_raw$Group <- as.factor(data_tissue_raw$Group)
+
+#subset for tissue
+data_tissue_all <- data_tissue
+tissues <- c("SKIN", "MUSCLE", "KIDNEY", "LIVER", "EPI", "BRAIN", "LUNG")
+#tissues <- c("KIDNEY", "BRAIN", "LIVER")
+#tissues <- c("KIDNEY", "LIVER", "MUSCLE")
+data_tissue_list <- list()
+data_tissue_up_list <- list()
+df_tissues <- list()
+data_tissue_mean_list <- list()
+thre_tissue_v <- list()
+data_tissue_thre <- list()
+df_tissue_thre <- list()
+thre <- 10
+
+for (i in tissues) {
+  data_tissue_mean_list[[i]] <- data_tissue_all[data_tissue_all$Tissue == i,]
+  data_tissue_mean_list[[i]] <- colMeans(data_tissue_mean_list[[i]][4:ncol(data_tissue_mean_list[[i]])], na.rm = TRUE)
+  thre_tissue_v[[i]] <- c("SampleID", "Tissue", "Group", names(data_tissue_mean_list[[i]][data_tissue_mean_list[[i]] > thre]))
+  data_tissue_thre[[i]] <- data_tissue_all[data_tissue_all$Tissue == i,] %>% select(thre_tissue_v[[i]])
+  data_tissue_thre[[i]] <- data_tissue_thre[[i]][match(data_qPCR[1:12,]$SampleID, data_tissue_thre[[i]]$SampleID),]
+  data_tissue_thre[[i]] <- log2(data_tissue_thre[[i]][4:ncol(data_tissue_thre[[i]])])
+}
+df_tissues <- data_tissue_thre
+names(df_tissues) <- replace(names(df_tissues), names(df_tissues) == "EPI", "FAT")
+data_qPCR$Tissue <- replace(data_qPCR$Tissue, data_qPCR$Tissue == "EPI", "FAT")
+names(data_tissue_mean_list) <- replace(names(data_tissue_mean_list), names(data_tissue_mean_list) == "EPI", "FAT")
+
+```
+
+
+```{r correlate tissue, include=FALSE}
+############
+#CORRELATION WITH
+sen_marker <- c("p16")
+############
+tissues <- c("SKIN", "MUSCLE", "KIDNEY", "LIVER", "FAT", "BRAIN", "LUNG")
+#tissues <- c("KIDNEY", "BRAIN", "LIVER")
+#tissues <- c("KIDNEY", "LIVER", "MUSCLE")
+stats_tissues_p16 <- list()
+r_tissues_p16 <- list()
+p_tissues_p16 <- list()
+for (i in tissues) {
+df_qPCR <- data_qPCR[data_qPCR$Tissue %in% i,][sen_marker]
+stats_tissues_p16[[i]] <- corr.test(df_qPCR, df_tissues[[i]], use = "pairwise", method = "pearson", adjust = "holm",
+                          alpha = .05, ci=TRUE, minlength=5,normal=TRUE)
+r_tissues_p16[[i]] <- stats_tissues_p16[[i]]$r
+p_tissues_p16[[i]] <- stats_tissues_p16[[i]]$p
+}
+
+
+data_tissue_mean_list_p16 <- list()
+for (i in tissues) {
+data_tissue_mean_list_p16[[i]] <- data_tissue_mean_list[[i]][names(data_tissue_mean_list[[i]]) %in% colnames(r_tissues_p16[[i]])]
+}
+
+new <- data.frame(matrix(NA, ncol = 4, nrow = sum(unlist(lapply(r_tissues_p16, length)))))
+mean_rpm <- data.frame(matrix(NA, ncol=3, nrow=sum(unlist(lapply(data_tissue_mean_list_p16, length)))))
+y <- 1
+x<- 0
+n <- 0
+x_1 <- 0
+n_1 <- 0
+for (i in tissues) {
+  n <- length(r_tissues_p16[[i]])
+  n_1 <- length(data_tissue_mean_list_p16[[i]])
+  x <- x + n
+  x_1 <- x_1 + n_1
+  new[,1][y:x] <- c(rep(i, ncol((r_tissues_p16[[i]]))))
+  new[,2][y:x] <- colnames(r_tissues_p16[[i]])
+  new[,3][y:x] <- c(unlist(r_tissues_p16[[i]]))
+  new[,4][y:x] <- c(unlist(p_tissues_p16[[i]]))
+  mean_rpm[,1][y:x_1] <- c(rep(i, length((data_tissue_mean_list_p16[[i]]))))
+  mean_rpm[,2][y:x_1] <- names(data_tissue_mean_list_p16[[i]])
+  mean_rpm[,3][y:x_1] <- c(unlist(data_tissue_mean_list_p16[[i]]))
+  y <- y + n
+}
+
+list_tissue_p16_mirs <- list()
+for (i in tissues) {
+  list_tissue_p16_mirs[[i]] <- colnames(p_tissues_p16[[i]])[p_tissues_p16[[i]] < 0.01]
+  list_tissue_p16_mirs[[i]] <- list_tissue_p16_mirs[[i]][!is.na(list_tissue_p16_mirs[[i]])]
+  list_tissue_p16_mirs[[i]] <- str_remove_all(list_tissue_p16_mirs[[i]], "mmu.")  
+  }
+names(list_tissue_p16_mirs) <- paste(names(list_tissue_p16_mirs), "_p16", sep="")
+
+colnames(new) <- c("Tissue", "microRNA", "p16_PCC", "p_value")
+new <- na.omit(new)
+new$microRNA <- str_remove_all(new$microRNA, "mmu.")
+colnames(mean_rpm) <- c("Tissue", "microRNA", "Mean_RPM")
+mean_rpm <- na.omit(mean_rpm)
+mean_rpm$microRNA <- str_remove_all(mean_rpm$microRNA, "mmu.")
+
+n_PCC_pos <- new[new$p_value < 0.01 & new$p16_PCC > 0,]$microRNA
+n_PCC_neg <- new[new$p_value < 0.01 & new$p16_PCC < 0,]$microRNA
+
+new <- new[new$microRNA %in% n_PCC_pos,]
+new <- new[order(new$Tissue, new$microRNA),]
+mean_rpm <- mean_rpm[mean_rpm$microRNA %in% n_PCC_pos,]
+mean_rpm <- mean_rpm[order(mean_rpm$Tissue, mean_rpm$microRNA),]
+
+new <- cbind(new, mean_rpm$Mean_RPM)
+colnames(new) <- c("Tissue", "microRNA", "p16_PCC", "p_value", "Mean_RPM")
+new$Mean_RPM <- log2(new$Mean_RPM)
+
+n_occur_pos <- data.frame(table(new[new$p_value < 0.01 & new$p16_PCC > 0,]$microRNA))
+#n_occur_neg <- data.frame(table(new_neg[new_neg$p_value < 0.01 & new_neg$p16_PCC < 0,]$microRNA))
+
+new$microRNA <- gsub("\\.", "-", new$microRNA)
+new$microRNA <- str_remove_all(new$microRNA, "miR-")
+n_occur_pos$Var1 <- gsub("\\.", "-", n_occur_pos$Var1)
+n_occur_pos$Var1 <- str_remove_all(n_occur_pos$Var1, "miR-")
+
+n_occur_pos <- n_occur_pos[order(-n_occur_pos$Freq),]
+
+new$microRNA <- as.factor(new$microRNA)
+new$microRNA <- factor(new$microRNA, levels = n_occur_pos$Var1)
+
+#fat_p16_mirs <- new[new$Tissue == "EPI",]$microRNA
+#fat_p16_mirs <- n_PCC
+#fat_p16_mirs <- gsub("\\.","-", fat_p16_mirs)
+
+for (i in tissues) {
+  names(data_tissue_mean_list_p16[[i]]) <- str_remove_all(names(data_tissue_mean_list_p16[[i]]), "mmu.")
+}
+
+new$Tissue <- replace(new$Tissue, new$Tissue == "EPI", "FAT")
+
+
+dot_p16 <- ggplot(new, aes(x=Tissue, y = microRNA, color = p16_PCC, size = Mean_RPM)) +
+  geom_point(aes(size=Mean_RPM, fill = p16_PCC), stroke=2.5, shape = 21, colour = ifelse(new$p_value < 0.01 & new$p16_PCC > 0, "red", "black")) + 
+  scale_fill_viridis_c() + 
+  cowplot::theme_cowplot() +
+  theme(axis.line  = element_blank()) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  theme(axis.text.y = element_text(angle = 25)) +
+  ylab('') +
+  theme(axis.ticks = element_blank()) 
+
+
+
+```
+
+```{r plot, echo=FALSE, fig.height=13, fig.width=4.1}
+plot(dot_p16)
+#png("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/Figures/p16_cor.png", height = 930, width = 290)
+#plot(dot_p16)
+#dev.off()
+```
+
+
+
+
+```{r load biofuid, include=FALSE}
+#################################
+#LOAD PLASMA & EV DATA
+#################################
+plasma_edgeR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/03-Next-Seq-Plasma-EV-data/bu2_plasma_edgeR.txt", header = TRUE, sep = "\t", dec = ".")
+ev_edgeR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/03-Next-Seq-Plasma-EV-data/bu2_ev_edgeR.txt", header = TRUE, sep = "\t", dec = ".")
+plasma_edgeR$miRNA <- as.factor(plasma_edgeR$miRNA)
+ev_edgeR$miRNA <- as.factor(ev_edgeR$miRNA)
+#edgeR stats for plasma
+plasma_edgeR$miRNA <- str_remove_all(plasma_edgeR$miRNA, "mmu-")
+plasma_edgeR$miRNA <- str_remove_all(plasma_edgeR$miRNA, "miR-")
+ev_edgeR$miRNA <- str_remove_all(ev_edgeR$miRNA, "mmu-")
+ev_edgeR$miRNA <- str_remove_all(ev_edgeR$miRNA, "miR-")
+
+plasma_edgeR_up <- plasma_edgeR[plasma_edgeR$PValue < 0.05 & plasma_edgeR$logFC > 0,]$miRNA
+ev_edgeR_up <- ev_edgeR[ev_edgeR$PValue < 0.05 & ev_edgeR$logFC > 0,]$miRNA
+
+# IMPORT EV AND PLASMA DATA
+data_plasma <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/03-Next-Seq-Plasma-EV-data/bu2_plasma_ev_rpm.txt", header = TRUE, sep = "\t", dec = ".") 
+data_plasma$SampleID <- as.factor(data_plasma$SampleID)
+data_plasma$Group <- as.factor(data_plasma$Group)
+data_plasma$Matrix <- as.factor(data_plasma$Matrix)
+
+#load RAW data
+data_plasma_raw <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/03-Next-Seq-Plasma-EV-data/bu2_plasma_ev_raw.txt", header = TRUE, sep = "\t", dec = ".") 
+
+#assign factors RAW
+data_plasma_raw$SampleID <- as.factor(data_plasma_raw$SampleID)
+data_plasma_raw$Group <- as.factor(data_plasma_raw$Group)
+data_plasma_raw$Matrix <- as.factor(data_plasma_raw$Matrix)
+
+#subset for tissue
+data_plasma_all <- data_plasma
+data_plasma <- data_plasma_all[data_plasma_all$Matrix %in% "PLASMA",]
+data_ev <- data_plasma_all[data_plasma_all$Matrix %in% "EV",]
+
+#subset for cell_type RAW
+data_plasma_all_raw <- data_plasma_raw
+data_plasma_raw <- data_plasma_all_raw[data_plasma_all_raw$Matrix %in% "PLASMA",]
+data_ev_raw <- data_plasma_all_raw[data_plasma_all_raw$Matrix %in% "EV",]
+
+#sort dfs according to mean rpm (per column)
+#create list with means and then vector for sorting df
+thre <- 5
+data_plasma_raw_mean_list <- colMeans(data_plasma_raw[4:ncol(data_plasma_raw)], na.rm = TRUE)
+thre_plasma_v <- c("SampleID", "Group", "Matrix", names(data_plasma_raw_mean_list[data_plasma_raw_mean_list > thre]))
+data_plasma_thre <- data_plasma %>% select(all_of(thre_plasma_v))
+
+data_plasma_mean_list <- colMeans(data_plasma[4:ncol(data_plasma)], na.rm = TRUE)
+thre_plasma_v_rpm <- c("SampleID", "Group", "Matrix", names(data_plasma_mean_list[data_plasma_mean_list > thre]))
+
+mean_rpm_plasma <- data.frame(matrix(NA, ncol=2, nrow=sum(unlist(lapply(data_plasma_mean_list, length)))))
+mean_rpm_plasma[,1] <- names(data_plasma_mean_list)
+mean_rpm_plasma[,2] <- c(unlist(data_plasma_mean_list))
+colnames(mean_rpm_plasma) <- c("microRNA", "Mean_RPM")
+mean_rpm_plasma$microRNA <- str_remove_all(mean_rpm_plasma$microRNA, "mmu.")
+mean_rpm_plasma$microRNA <- str_remove_all(mean_rpm_plasma$microRNA, "miR.")
+mean_rpm_plasma$microRNA <- gsub("\\.", "-", mean_rpm_plasma$microRNA)
+mean_rpm_plasma_all <- mean_rpm_plasma
+
+data_ev_raw_mean_list <- colMeans(data_ev_raw[4:ncol(data_ev_raw)], na.rm = TRUE)
+thre_ev_v <- c("SampleID", "Group", "Matrix", names(data_ev_raw_mean_list[data_ev_raw_mean_list > thre]))
+data_ev_thre <- data_ev %>% select(all_of(thre_ev_v))
+
+data_ev_mean_list <- colMeans(data_ev[4:ncol(data_ev)], na.rm = TRUE)
+thre_ev_v_rpm <- c("SampleID", "Group", "Matrix", names(data_ev_mean_list[data_ev_mean_list > thre]))
+
+mean_rpm_ev <- data.frame(matrix(NA, ncol=2, nrow=sum(unlist(lapply(data_ev_mean_list, length)))))
+mean_rpm_ev[,1] <- names(data_ev_mean_list)
+mean_rpm_ev[,2] <- c(unlist(data_ev_mean_list))
+colnames(mean_rpm_ev) <- c("microRNA", "Mean_RPM")
+mean_rpm_ev$microRNA <- str_remove_all(mean_rpm_ev$microRNA, "mmu.")
+mean_rpm_ev$microRNA <- str_remove_all(mean_rpm_ev$microRNA, "miR.")
+mean_rpm_ev$microRNA <- gsub("\\.", "-", mean_rpm_ev$microRNA)
+mean_rpm_ev_all <- mean_rpm_ev
+
+#format SampleIDs
+data_plasma_thre$SampleID <- sub("\\_.*", "", data_plasma_thre$SampleID)
+data_ev_thre$SampleID <- sub("\\_.*", "", data_ev_thre$SampleID)
+
+# IMPORT TISSUE qPCR DATA
+data_plasma_sort <- data_plasma_thre[match(data_qPCR$SampleID[1:12], data_plasma_thre$SampleID),]
+data_ev_sort <- data_ev_thre[match(data_qPCR$SampleID[1:12], data_ev_thre$SampleID),]
+
+#select detectable subsets in plasma and ev dfs
+df_plasma <- data_plasma_sort[4:ncol(data_plasma_sort)]
+df_plasma <- log2(df_plasma)
+colnames(df_plasma) <- str_remove_all(colnames(df_plasma), "mmu.")
+colnames(df_plasma) <- str_remove_all(colnames(df_plasma), "miR.")
+colnames(df_plasma) <- gsub("\\.","-", colnames(df_plasma))
+
+df_tissues_sub_plasma <- list()
+for (i in tissues) {
+  df_tissues_sub_plasma[[i]] <- df_tissues[[i]]
+}
+
+for (i in tissues) {
+  colnames(df_tissues_sub_plasma[[i]]) <- str_remove_all(colnames(df_tissues_sub_plasma[[i]]), "mmu.")
+  colnames(df_tissues_sub_plasma[[i]]) <- str_remove_all(colnames(df_tissues_sub_plasma[[i]]), "miR.")
+  colnames(df_tissues_sub_plasma[[i]]) <- gsub("\\.","-", colnames(df_tissues_sub_plasma[[i]]))
+}
+
+plasma_mirs <- colnames(df_plasma)
+for (i in tissues) {
+  df_tissues_sub_plasma[[i]] <- df_tissues_sub_plasma[[i]][colnames(df_tissues_sub_plasma[[i]]) %in% plasma_mirs]
+}
+
+
+df_ev <- data_ev_sort[4:ncol(data_ev_sort)]
+df_ev <- log2(df_ev)
+colnames(df_ev) <- str_remove_all(colnames(df_ev), "mmu.")
+colnames(df_ev) <- str_remove_all(colnames(df_ev), "miR.")
+colnames(df_ev) <- gsub("\\.","-", colnames(df_ev))
+
+df_tissues_sub_ev <- list()
+for (i in tissues) {
+  df_tissues_sub_ev[[i]] <- df_tissues[[i]]
+}
+
+for (i in tissues) {
+  colnames(df_tissues_sub_ev[[i]]) <- str_remove_all(colnames(df_tissues_sub_ev[[i]]), "mmu.")
+  colnames(df_tissues_sub_ev[[i]]) <- str_remove_all(colnames(df_tissues_sub_ev[[i]]), "miR.")
+  colnames(df_tissues_sub_ev[[i]]) <- gsub("\\.","-", colnames(df_tissues_sub_ev[[i]]))
+}
+
+ev_mirs <- colnames(df_ev)
+for (i in tissues) {
+  df_tissues_sub_ev[[i]] <- df_tissues_sub_ev[[i]][colnames(df_tissues_sub_ev[[i]]) %in% ev_mirs]
+}
+
+```
+
+
+```{r correlate biofluid, include=FALSE}
+###BIOFLUID TISSUE CORRELATION
+###p16_mirs PLASMA & EV
+####PLASMA
+tissues <- replace(tissues, tissues == "EPI", "FAT")
+names(df_tissues_sub_ev) <- replace(names(df_tissues_sub_ev), names(df_tissues_sub_ev) == "EPI", "FAT")
+names(df_tissues_sub_plasma) <- replace(names(df_tissues_sub_plasma), names(df_tissues_sub_plasma) == "EPI", "FAT")
+
+stats_tissues_plasma <- list()
+r_tissues_plasma <- list()
+p_tissues_plasma <- list()
+mir_list <- list()
+for (i in tissues) {
+  mir_list[[i]] <- new[new$Tissue == i & new$p_value < 0.01 & new$p16_PCC > 0,]$microRNA
+  mir_list[[i]] <- gsub("\\.", "-", mir_list[[i]])
+  mir_list[[i]] <- str_remove_all(mir_list[[i]], "miR-")
+  if (length(mir_list[[i]]) > 0) {
+  stats_tissues_plasma[[i]] <- corr.test(df_plasma[colnames(df_plasma) %in% mir_list[[i]]], df_tissues_sub_plasma[[i]][colnames(df_tissues_sub_plasma[[i]]) %in% mir_list[[i]]], 
+                                         use = "pairwise", method = "pearson", adjust = "holm",
+                                      alpha = .05, ci=TRUE, minlength=5,normal=TRUE)
+  r_tissues_plasma[[i]] <- stats_tissues_plasma[[i]]$r
+  p_tissues_plasma[[i]] <- stats_tissues_plasma[[i]]$p
+  }
+}
+
+#make DF with PCC
+tissues_sub <- names(r_tissues_plasma)
+df_r_tissue_plasma <- list()
+for (i in tissues_sub) {
+    m <- r_tissues_plasma[[i]]
+    m <- data.frame(row=rownames(m)[row(m)], col=colnames(m)[col(m)], corr=c(m))
+    m <- m[m$row == m$col,]
+    df_r_tissue_plasma[[i]] <- m
+    tissue_name <- c(rep(i, nrow(df_r_tissue_plasma[[i]])))
+    df_r_tissue_plasma[[i]] <- cbind(tissue_name, df_r_tissue_plasma[[i]][2:3])
+}
+
+#make DF with p-value
+tissues_sub <- names(p_tissues_plasma)
+df_p_tissue_plasma <- list()
+for (i in tissues_sub) {
+    m <- p_tissues_plasma[[i]]
+    m <- data.frame(row=rownames(m)[row(m)], col=colnames(m)[col(m)], p=c(m))
+    m <- m[m$row == m$col,]
+    df_p_tissue_plasma[[i]] <- m
+    tissue_name <- c(rep(i, nrow(df_p_tissue_plasma[[i]])))
+    df_p_tissue_plasma[[i]] <- cbind(tissue_name, df_p_tissue_plasma[[i]][2:3], df_r_tissue_plasma[[i]][3])
+}
+
+
+tissue_plasma_merge_r <- do.call(rbind.data.frame, df_r_tissue_plasma)
+tissue_plasma_merge_p <- do.call(rbind.data.frame, df_p_tissue_plasma)
+tissue_plasma_merge <- cbind(tissue_plasma_merge_r, "p" = tissue_plasma_merge_p$p)
+
+mir_sub <- tissue_plasma_merge$col[tissue_plasma_merge$p < 0.05]
+tissue_plasma_merge_sub <- tissue_plasma_merge[tissue_plasma_merge$col %in% mir_sub,]
+n_occur_tissue_plasma <- data.frame(table(tissue_plasma_merge_sub[tissue_plasma_merge_sub$p < 0.05,]$col))
+n_occur_tissue_plasma <- n_occur_tissue_plasma[order(n_occur_tissue_plasma$Freq),]
+
+tissue_plasma_merge_sub$col <- as.factor(tissue_plasma_merge_sub$col)
+tissue_plasma_merge_sub$col <- factor(tissue_plasma_merge_sub$col, levels = n_occur_tissue_plasma$Var1)
+
+#mean_rpm_plasma_all$microRNA <- str_remove_all(mean_rpm_plasma_all$microRNA, "miR-")
+#mean_rpm_plasma_all$microRNA <- str_remove_all(mean_rpm_plasma_all$microRNA, "mmu-")
+RPM <- c(rep(NA, length(tissue_plasma_merge$col)))
+tissue_plasma_merge <- cbind(tissue_plasma_merge, RPM)
+mean_rpm_plasma <- mean_rpm_plasma_all[mean_rpm_plasma_all$microRNA %in% tissue_plasma_merge$col,]
+
+length <- c(1:length(tissue_plasma_merge$RPM))
+for (i in length) {
+get_row <- which(mean_rpm_plasma$microRNA == tissue_plasma_merge[i,]$col)
+tissue_plasma_merge[i,]$RPM <- mean_rpm_plasma[get_row,]$Mean_RPM
+}
+
+####EV
+stats_tissues_ev <- list()
+r_tissues_ev <- list()
+p_tissues_ev <- list()
+mir_list <- list()
+for (i in tissues) {
+  mir_list[[i]] <- new[new$Tissue == i & new$p_value < 0.01 & new$p16_PCC > 0,]$microRNA
+  mir_list[[i]] <- gsub("\\.", "-", mir_list[[i]])
+  mir_list[[i]] <- str_remove_all(mir_list[[i]], "miR-")
+  if (length(mir_list[[i]]) > 0 & any(colnames(df_ev) %in% mir_list[[i]])) {
+  stats_tissues_ev[[i]] <- corr.test(df_ev[colnames(df_ev) %in% mir_list[[i]]], 
+                                     df_tissues_sub_ev[[i]][colnames(df_tissues_sub_ev[[i]]) %in% mir_list[[i]]], 
+                                         use = "pairwise", method = "pearson", adjust = "holm",
+                                         alpha = .05, ci=TRUE, minlength=5,normal=TRUE)
+  r_tissues_ev[[i]] <- stats_tissues_ev[[i]]$r
+  p_tissues_ev[[i]] <- stats_tissues_ev[[i]]$p
+  }
+}
+
+#make DF for PCC
+tissues_sub <- names(r_tissues_ev)
+df_r_tissue_ev <- list()
+for (i in tissues_sub) {
+  m <- r_tissues_ev[[i]]
+  m <- data.frame(row=rownames(m)[row(m)], col=colnames(m)[col(m)], corr=c(m))
+  m <- m[m$row == m$col,]
+  df_r_tissue_ev[[i]] <- m
+  tissue_name <- c(rep(i, nrow(df_r_tissue_ev[[i]])))
+  df_r_tissue_ev[[i]] <- cbind(tissue_name, df_r_tissue_ev[[i]][2:3])
+}
+
+#make DF for p-value
+tissues_sub <- names(p_tissues_ev)
+df_p_tissue_ev <- list()
+for (i in tissues_sub) {
+  m <- p_tissues_ev[[i]]
+  m <- data.frame(row=rownames(m)[row(m)], col=colnames(m)[col(m)], p=c(m))
+  m <- m[m$row == m$col,]
+  df_p_tissue_ev[[i]] <- m
+  tissue_name <- c(rep(i, nrow(df_p_tissue_ev[[i]])))
+  df_p_tissue_ev[[i]] <- cbind(tissue_name, df_p_tissue_ev[[i]][2:3], df_r_tissue_ev[[i]][3])
+}
+
+tissue_ev_merge_r <- do.call(rbind.data.frame, df_r_tissue_ev)
+tissue_ev_merge_p <- do.call(rbind.data.frame, df_p_tissue_ev)
+tissue_ev_merge <- cbind(tissue_ev_merge_r, "p" = tissue_ev_merge_p$p)
+
+mir_sub <- tissue_ev_merge$col[tissue_ev_merge$p < 0.05]
+tissue_ev_merge_sub <- tissue_ev_merge[tissue_ev_merge$col %in% mir_sub,]
+n_occur_tissue_ev <- data.frame(table(tissue_ev_merge_sub[tissue_ev_merge_sub$p < 0.05,]$col))
+n_occur_tissue_ev <- n_occur_tissue_ev[order(n_occur_tissue_ev$Freq),]
+
+tissue_ev_merge_sub$col <- as.factor(tissue_ev_merge_sub$col)
+tissue_ev_merge_sub$col <- factor(tissue_ev_merge_sub$col, levels = n_occur_tissue_ev$Var1)
+
+#mean_rpm_ev_all$microRNA <- str_remove_all(mean_rpm_ev_all$microRNA, "miR-")
+#mean_rpm_ev_all$microRNA <- str_remove_all(mean_rpm_ev_all$microRNA, "mmu-")
+RPM <- c(rep(NA, length(tissue_ev_merge$col)))
+tissue_ev_merge <- cbind(tissue_ev_merge, RPM)
+mean_rpm_ev <- mean_rpm_ev_all[mean_rpm_ev_all$microRNA %in% tissue_ev_merge$col,]
+
+length <- c(1:length(tissue_ev_merge$RPM))
+for (i in length) {
+  get_row <- which(mean_rpm_ev$microRNA == tissue_ev_merge[i,]$col)
+  tissue_ev_merge[i,]$RPM <- mean_rpm_ev[get_row,]$Mean_RPM
+}
+
+tissue_ev_merge[tissue_ev_merge == "EPI"] <- "FAT"
+tissue_plasma_merge[tissue_plasma_merge == "EPI"] <- "FAT"
+tissue_ev_merge_log2 <- tissue_ev_merge
+tissue_ev_merge_log2$RPM <- log2(tissue_ev_merge_log2$RPM)
+
+target <- c("SKIN", "MUSCLE", "LUNG", "LIVER", "KIDNEY", "FAT", "BRAIN")
+tissue_ev_merge <- tissue_ev_merge %>% slice(order(factor(tissue_name, levels = target)))
+tissue_plasma_merge <- tissue_plasma_merge %>% slice(order(factor(tissue_name, levels = target)))
+
+tissue_ev_merge <- na.omit(tissue_ev_merge)
+tissue_plasma_merge <- na.omit(tissue_plasma_merge)
+
+#with labels
+ev_tissue_cor <- ggplot(tissue_ev_merge, aes(x=tissue_name, y = corr, color = corr, label = col)) + geom_boxplot(width = 0.9, lwd = 1.3, fill = "white") +
+  geom_jitter(aes(size=RPM), fill = ifelse(tissue_ev_merge$corr > 0.57, "mediumorchid1", "grey"),stroke=2.5, shape = 21, colour = ifelse(tissue_ev_merge$col %in% ev_edgeR_up, "red", "black"), width = 0.1) + 
+  cowplot::theme_cowplot(font_size = 20) + 
+  theme(axis.line  = element_blank()) +
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1)) +
+  theme(axis.text.y = element_text(angle = 0)) +
+  ylab('') + #geom_hline(yintercept = 0.57, linetype = "dashed", color = "red", size = 1) +
+  theme(axis.ticks = element_blank()) + scale_y_continuous(name="PCC [EV - TISSUE]", limits = c(-1,1)) +
+  geom_text_repel(aes(label=ifelse(corr > 0.5, as.character(col), '')), box.padding = 2, max.overlaps = Inf, size = 4, colour = "black") +
+  scale_size_binned() + coord_flip()
+
+#without red/black borders
+ev_tissue_cor <- ggplot(tissue_ev_merge, aes(x=tissue_name, y = corr, color = corr, label = col)) + geom_boxplot(width = 0.9, lwd = 1.3, fill = "white") +
+  geom_jitter(aes(size=RPM), fill = ifelse(tissue_ev_merge$corr > 0.57, "mediumorchid1", "grey"),stroke=2.5, shape = 21, colour = ifelse(tissue_ev_merge$col %in% ev_edgeR_up, "black", "black"), width = 0.1) + 
+  cowplot::theme_cowplot(font_size = 20) + 
+  theme(axis.line  = element_blank()) +
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1)) +
+  theme(axis.text.y = element_text(angle = 0)) +
+  ylab('') + #geom_hline(yintercept = 0.57, linetype = "dashed", color = "red", size = 1) +
+  theme(axis.ticks = element_blank()) + scale_y_continuous(name="PCC [EV - TISSUE]", limits = c(-1,1)) +
+  scale_size_binned() + coord_flip()
+
+print(ev_tissue_cor)
+
+
+#without labels
+p_ev <- tissue_ev_merge %>%
+      mutate(tissue_name = fct_relevel(tissue_name, target)) %>%  
+  ggplot(aes(x=tissue_name, y = corr, color = corr, label = col)) + geom_boxplot(width = 0.5, lwd = 1.3, fill = "white") +
+  geom_jitter(aes(size=RPM), fill = ifelse(tissue_ev_merge$p < 0.05 & tissue_ev_merge$corr > 0, "mediumorchid1", "grey"),stroke=1.8, shape = 21, colour = ifelse(tissue_ev_merge$col %in% ev_edgeR_up, "black", "black"), width = 0.2) + 
+  cowplot::theme_cowplot(font_size = 20) + 
+  theme(axis.line  = element_blank()) +
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1)) +
+  theme(axis.text.y = element_text(angle = 0)) +
+  ylab('') + #geom_hline(yintercept = 0.57, linetype = "dashed", color = "red", size = 1) +
+  theme(axis.ticks = element_blank()) + scale_y_continuous(name="PCC [EV - TISSUE]", limits = c(-1,1)) +
+  scale_size_binned() + coord_flip()
+
+#png("C:/Users/morit/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/05-CIRCULATION-TISSUE-COR/ev_tissue_cor.png", width = 900, height = 900,
+#    res = 120)
+#print(ev_tissue_cor)
+#dev.off()
+
+
+#with labels
+p_lab <- ggplot(tissue_plasma_merge, aes(x=tissue_name, y = corr, color = corr, label = col)) + geom_boxplot(width = 0.3, lwd = 1.3, fill = "white") +
+  geom_jitter(aes(size=RPM), fill = ifelse(tissue_plasma_merge$corr > 0.57, "mediumorchid1", "grey"),stroke=2.5, shape = 21, colour = ifelse(tissue_plasma_merge$col %in% plasma_edgeR_up, "red", "black"), width = 0.3) + 
+  cowplot::theme_cowplot(font_size = 20) + 
+  theme(axis.line  = element_blank()) +
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1)) +
+  theme(axis.text.y = element_text(angle = 0)) + 
+  ylab('') + #geom_hline(yintercept = 0.57, linetype = "dashed", color = "red", size = 0) +
+  theme(axis.ticks = element_blank()) + scale_y_continuous(name = "PCC [PLASMA - TISSUE]", limits = c(-0.55,1)) +
+  geom_text_repel(aes(label=ifelse(corr > 0.5, as.character(col), '')), box.padding = 2, max.overlaps = Inf, size = 4, colour = "black") +
+  scale_size_binned() + coord_flip()
+
+#without labels and in right order
+p <- tissue_plasma_merge %>%
+      mutate(tissue_name = fct_relevel(tissue_name, target)) %>%
+ggplot(aes(x=tissue_name, y = corr, color = corr, label = col)) + geom_boxplot(width = 0.5, lwd = 1.3, fill = "white") +
+  geom_jitter(aes(size=RPM), fill = ifelse(tissue_plasma_merge$p < 0.05 & tissue_plasma_merge$corr > 0, "mediumorchid1", "grey"),stroke=1.8, shape = 21, colour = ifelse(tissue_plasma_merge$col %in% plasma_edgeR_up, "black", "black"), width = 0.2) + 
+  cowplot::theme_cowplot(font_size = 20) + 
+  theme(axis.line  = element_blank()) +
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1)) +
+  theme(axis.text.y = element_text(angle = 0)) + 
+  ylab('') + #geom_hline(yintercept = 0.57, linetype = "dashed", color = "red", size = 0) +
+  theme(axis.ticks = element_blank()) + scale_y_continuous(name = "PCC [PLASMA - TISSUE]", limits = c(-0.55,1)) +
+  scale_size_binned() + coord_flip()
+
+print(p_ev)
+```
+
+```{r heatmap biofluid, include=FALSE}
+library(UpSetR)
+target_v2 <- c("BRAIN", "FAT", "KIDNEY", "LIVER", "LUNG", "MUSCLE", "SKIN")
+target_v2_p <- target_v2[target_v2 %in% names(df_p_tissue_plasma)]  
+target_v2_ev <- target_v2[target_v2 %in% names(df_p_tissue_ev)]
+df_p_tissue_plasma_sort <- df_p_tissue_plasma[target_v2_p]
+df_p_tissue_ev_sort <- df_p_tissue_ev[target_v2_ev]
+
+df_r_tissue_plasma_col <- lapply(df_p_tissue_plasma_sort, function(x) { x$col })
+
+df_r_tissue_plasma_corr <- lapply(df_p_tissue_plasma_sort, function(x) { x[x$p < 0.05 & x$corr > 0,]$col })
+names(df_r_tissue_plasma_corr) <- paste(names(df_r_tissue_plasma_corr), "_plasma_corr", sep = "")
+df_r_tissue_plasma_corr <- list_drop_empty(df_r_tissue_plasma_corr)
+
+df_r_tissue_ev_corr <- lapply(df_p_tissue_ev_sort, function(x) { x[x$p < 0.05 & x$corr > 0,]$col })
+names(df_r_tissue_ev_corr) <- paste(names(df_r_tissue_ev_corr), "_ev_corr", sep = "")
+df_r_tissue_ev_corr <- list_drop_empty(df_r_tissue_ev_corr)
+
+df_r_tissue_plasma_corr <- lapply(df_r_tissue_plasma_corr, function(x) {na.omit(x)})
+df_r_tissue_ev_corr <- lapply(df_r_tissue_ev_corr, function(x) {na.omit(x)})
+
+df_r_tissue_ev_corr <- df_r_tissue_ev_corr[lapply(df_r_tissue_ev_corr,length)>0]
+df_r_tissue_plasma_corr <- df_r_tissue_plasma_corr[lapply(df_r_tissue_plasma_corr,length)>0]
+
+
+listInput_PLASMA <- c(df_r_tissue_plasma_col,
+                      df_r_tissue_plasma_corr,
+                      df_r_tissue_ev_corr)
+
+x_PLASMA <-  upset(fromList(listInput_PLASMA), order.by = "degree", point.size = 3.5, line.size = 2,
+                    mainbar.y.label = "p16_correlated", sets.x.label = "DE microRNAs per cell type", nsets = 21)
+
+
+#without row split
+a <- length(names(df_r_tissue_plasma_col))
+b <- length(names(df_r_tissue_plasma_corr))
+c <- length(names(df_r_tissue_ev_corr))
+
+#p16 plot
+miRNAs_PLASMA <- x_PLASMA$New_data
+rownames(miRNAs_PLASMA) <- unique(unlist(listInput_PLASMA))
+miRNAs_PLASMA_sub <- miRNAs_PLASMA[rowSums(miRNAs_PLASMA[(a+1):(a+b+c)]) >= 1,]
+
+colnames(miRNAs_PLASMA_sub) <- c(names(df_r_tissue_plasma_col), 
+                                 str_remove_all(names(df_r_tissue_plasma_corr), "_plasma_corr"), 
+                                 str_remove_all(names(df_r_tissue_ev_corr), "_ev_corr"))
+miRNAs_PLASMA_sub <- miRNAs_PLASMA_sub[,colSums(miRNAs_PLASMA_sub) > 0]
+colnames(miRNAs_PLASMA_sub) <- str_remove_all(colnames(miRNAs_PLASMA_sub), ".1")
+colnames(miRNAs_PLASMA_sub) <- str_remove_all(colnames(miRNAs_PLASMA_sub), ".2")
+a <- a-1
+row_split = rep("tissue-p16 PCC", a)
+row_split[(a+1):(a+b)] = "tissue-plasma PCC"
+row_split[(a+b+1):(a+b+c)] = "tissue-EV PCC"
+row_split <- factor(row_split, levels=c("tissue-p16 PCC","tissue-plasma PCC","tissue-EV PCC"))
+
+heat_PLASMA <- Heatmap(t(miRNAs_PLASMA_sub), cluster_rows = FALSE, cluster_columns = FALSE, row_names_gp = gpar(fontsize = 18),
+                       row_split = row_split, column_title = paste(sen_marker, " senomiRs", sep = ""), 
+                       column_names_side = "top", column_names_rot = 45, column_names_gp = gpar(fontsize = 18),
+  rect_gp = gpar(col = "black", lwd = 1), col = c("white", "#E76BF3"),
+  )
+
+print(heat_PLASMA)
+```
+
+
+```{r plot_2, echo=FALSE, fig.height=20, fig.width=4.1}
+p1_TNF_height <- 17
+p1_TNF_width <- 4.1
+p1_IL6_height <- 10
+p1_p16_height <- 13
+p1_p21_height <- 11
+p1_p21_width <- 3.5
+p1_MCP_height <- 13
+p1_MCP_width <- 3.5
+
+ggsave(
+  "/Users/weiglm/Desktop/SENOMIR/14-Manuscript/Figures/IL6_cor.png",
+  plot = dot_p16, width = 3.1, height = 11,
+)
+
+```
+
+```{r plot_2, echo=FALSE, fig.height=10, fig.width=20}
+plot(p)
+
+ggsave(
+  "/Users/weiglm/Desktop/SENOMIR/14-Manuscript/Figures/p21_cor_plasma.png",
+  plot = p, width = 8, height = 3.2,
+)
+
+```
+
+```{r plot_2, echo=FALSE, fig.height=20, fig.width=20}
+plot(p_ev)
+
+ggsave(
+  "/Users/weiglm/Desktop/SENOMIR/14-Manuscript/Figures/p21_cor_ev.png",
+  plot = p_ev, width = 8, height = 3.2,
+)
+
+```
+
+```{r plot_2, echo=FALSE, fig.height=5, fig.width=6}
+plot(heat_PLASMA)
+p4_TNF__p16_height <- 450
+p4_TNF_p16_width <- 550
+p4_IL6_height <- 420
+p4_IL6_width <- 550
+p4_p21_height <- 400
+p4_p21_width <- 570
+
+
+png(file="/Users/weiglm/Desktop/SENOMIR/14-Manuscript/Figures/IL6_cor_summary.png", width = 550, height = 400)
+heat_PLASMA <- Heatmap(t(miRNAs_PLASMA_sub), cluster_rows = FALSE, cluster_columns = FALSE, row_names_gp = gpar(fontsize = 14),
+                       row_split = row_split, column_title = paste(sen_marker, " senomiRs", sep = ""), row_title_gp = gpar(fontsize = 14),
+                       column_names_side = "top", column_names_rot = 45, column_names_gp = gpar(fontsize = 14),
+  rect_gp = gpar(col = "black", lwd = 1), col = c("white", "#E76BF3"),
+  )
+print(heat_PLASMA)
+dev.off()
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

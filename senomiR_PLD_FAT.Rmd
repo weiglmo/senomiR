@@ -1,0 +1,551 @@
+---
+title: "senomiR_PLD_FAT"
+output: html_document
+date: "2023-07-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#load packages
+library(dplyr)
+library(devtools)
+library(ggbiplot)
+library(factoextra)
+library(ggplot2)
+library(ggplotify)
+library(ggpubr)
+library(pheatmap)
+library(RColorBrewer)
+library(viridis)
+library(hrbrthemes)
+library(ggrepel)
+library(UpSetR)
+library(data.table)
+library(ggpubr)
+library(purrr)
+library(ggvenn)
+#library(EnhancedVolcano)
+library(stringr)
+library(psych)
+library(ComplexHeatmap)
+library(venn)
+library(circlize)
+
+#load lists and dfs
+plasma_pca_plot <- c()
+
+
+  data_fat <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/08-NGS-PLD-cohort/PLD_FAT_RPM_R.txt", header = TRUE, sep = "\t", dec = ".") 
+  data_fat$SampleID <- as.factor(data_fat$SampleID)
+  data_fat$Group <- as.factor(data_fat$Group)
+  colnames(data_fat)[3:ncol(data_fat)] <- c(str_remove_all(colnames(data_fat[3:ncol(data_fat)]), "mmu."))
+  colnames(data_fat)[3:ncol(data_fat)] <- c(gsub("\\.", "-",c(colnames(data_fat[3:ncol(data_fat)]))))
+  
+  #sort dfs according to mean rpm (per column)
+  #create list with means and then vector for sorting df
+  thre <- 10
+  data_fat_mean_list <- colMeans(data_fat[3:ncol(data_fat)], na.rm = TRUE)
+  thre_fat_v <- c("SampleID", "Group", names(data_fat_mean_list[data_fat_mean_list > thre]))
+  data_fat_thre <- data_fat %>% select(all_of(thre_fat_v))
+  data_fat_thre_cor <- data_fat %>% select(all_of(thre_fat_v))
+  
+  #loop sd()/mean() over all columns of df and save in list
+  cv_list <- list()
+  loop <- colnames(data_fat_thre[3:ncol(data_fat_thre)])
+  #loop
+  for (i in loop) {
+    cv_list[[i]] <- (sd(data_fat_thre[,i])/mean(data_fat_thre[,i]))*100
+  }
+  
+  #make df out of list with cv and sort from high to low
+  #top n miRNAs to be used
+  n <- 100
+  df_cv <- data.frame(names(cv_list),(unlist(cv_list)))
+  colnames(df_cv) <- c("microRNA", "CV")
+  df_cv <- df_cv[order(df_cv$CV, decreasing=TRUE),]
+  miR_v <- c("SampleID", "Group", df_cv$microRNA[1:n])
+  
+  #CREATE HEATMAP
+  Group <- c("darkblue", "mediumorchid2", "green")
+  names(Group) <- c("CHOW_VEH", "HFD_VEH", "HFD_TAM")
+  ann_colors <- list(Group = Group)
+  data_fat_thre <- data_fat_thre %>% select(all_of(miR_v))
+  rownames(data_fat_thre) <- data_fat_thre$SampleID
+  
+  pos_fat_thre <- data.frame("Group" = data_fat_thre$Group)
+  rownames(pos_fat_thre) <- rownames(data_fat_thre)
+  
+  data_fat_thre_num <- data_fat_thre[,3:ncol(data_fat_thre)]
+  data_fat_thre_num_scale <- scale(data_fat_thre_num)
+  rownames(data_fat_thre_num_scale) <- rownames(data_fat_thre)
+  
+#  as.ggplot(pheatmap(t(data_fat_thre_num_scale), 
+#      annotation_col = pos_fat_thre, 
+#      annotation_colors = ann_colors, main = paste("top ",n," microRNAs CV%"), fontsize_row = 7, border_col = "black",
+#      cellwidth = 9, cellheight = 5, clustering_distance_cols = "correlation", clustering_distance_rows = "correlation",
+#      cluster_rows = TRUE, treeheight_row = 20, treeheight_col = 20, cutree_cols = 2,
+#      show_colnames = FALSE, show_rownames = FALSE,
+#      color = viridis(9))) + ggtitle("PLD FAT")
+
+
+  column_ha_fat = HeatmapAnnotation(Group = data_fat_thre$Group,
+                              col = list(Group = ann_colors$Group),
+                              gp = gpar(col = "black"),
+                              simple_anno_size = unit(0.4, "cm"))
+    
+PLD_fat_heat <- Heatmap(t(data_fat_thre_num_scale), top_annotation = column_ha_fat, show_column_names = TRUE, show_row_names = FALSE,
+        col = viridis(7), width = unit(6.5, "cm"), height = unit(15, "cm"), clustering_distance_columns = "pearson",
+        clustering_distance_rows = "pearson", border_gp = gpar(col = "black", lty = 1), heatmap_legend_param = list(legend_height = unit(4, "cm"), legend_width = unit(2, "cm")))
+
+
+```
+
+```{r setup, include=FALSE}
+
+#load microRNA DE data FAT TISSUE
+  HFD_CHOW_edgeR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/08-NGS-PLD-cohort/PLD_FAT_HFD_CHOW_edgeR.txt", header = TRUE, sep = "\t", dec = ".")
+  HFDTAM_HFDVEH_edgeR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/08-NGS-PLD-cohort/PLD_FAT_HFDTAM_HFDVEH_edgeR.txt", header = TRUE, sep = "\t", dec = ".")
+  
+  HFD_CHOW_edgeR$miRNA <- as.factor(HFD_CHOW_edgeR$miRNA)
+  HFD_CHOW_edgeR$miRNA <- str_remove_all(HFD_CHOW_edgeR$miRNA, "mmu-")
+  HFDTAM_HFDVEH_edgeR$miRNA <- as.factor(HFDTAM_HFDVEH_edgeR$miRNA)
+  HFDTAM_HFDVEH_edgeR$miRNA <- str_remove_all(HFDTAM_HFDVEH_edgeR$miRNA, "mmu-")
+  
+  hfd_diff_ex <- HFD_CHOW_edgeR$miRNA[HFD_CHOW_edgeR$FDR < 0.1]
+  tam_diff_ex <- HFDTAM_HFDVEH_edgeR$miRNA[HFDTAM_HFDVEH_edgeR$FDR < 0.1]
+  hfd_up <- HFD_CHOW_edgeR[HFD_CHOW_edgeR$FDR < 0.1 & HFD_CHOW_edgeR$logFC > 0,]$miRNA
+  hfd_down <- HFD_CHOW_edgeR[HFD_CHOW_edgeR$FDR < 0.1 & HFD_CHOW_edgeR$logFC < 0,]$miRNA
+  tam_up <- HFDTAM_HFDVEH_edgeR[HFDTAM_HFDVEH_edgeR$FDR < 0.1 & HFDTAM_HFDVEH_edgeR$logFC > 0,]$miRNA
+  tam_down <- HFDTAM_HFDVEH_edgeR[HFDTAM_HFDVEH_edgeR$FDR < 0.1 & HFDTAM_HFDVEH_edgeR$logFC < 0,]$miRNA
+  diff_ex <- c("SampleID", "Group", hfd_diff_ex, tam_diff_ex)
+  overlap <- intersect(HFD_CHOW_edgeR$miRNA[HFD_CHOW_edgeR$FDR < 0.1], HFDTAM_HFDVEH_edgeR$miRNA[HFDTAM_HFDVEH_edgeR$FDR < 0.1])
+  overlap <- intersect(HFD_CHOW_edgeR$miRNA[HFD_CHOW_edgeR$FDR < 0.1 & HFD_CHOW_edgeR$logFC > 0][1:10], HFDTAM_HFDVEH_edgeR$miRNA[HFDTAM_HFDVEH_edgeR$FDR < 0.1 & HFDTAM_HFDVEH_edgeR$logFC < 0])
+  
+  data_fat_diff_ex <- data_fat %>% select(all_of(diff_ex))
+  data_fat_diff_ex$Group <- factor(data_fat_diff_ex$Group, levels=c('CHOW_VEH', 'HFD_VEH', 'HFD_TAM'))
+  data_fat_diff_ex <- data_fat_diff_ex[order(data_fat_diff_ex$Group),]
+  data_fat_diff_ex
+  data_fat_diff_ex_num <- data_fat_diff_ex[,3:ncol(data_fat_diff_ex)]
+  data_fat_diff_ex_num_scale <- scale(data_fat_diff_ex_num)
+  rownames(data_fat_diff_ex_num_scale) <- rownames(data_fat_diff_ex)
+  
+  column_ha_fat = HeatmapAnnotation(Group = data_fat_diff_ex$Group,
+                              col = list(Group = ann_colors$Group),
+                              gp = gpar(col = "black"),
+                              simple_anno_size = unit(0.4, "cm"))
+  
+  column_split = rep("CHOW", 5)
+  column_split[6:10] = "HFD + VEH"
+  column_split[11:16] = "HFD + TAM"
+  column_split <- factor(column_split, levels = c("CHOW", "HFD + VEH", "HFD + TAM"))
+ # column_split = rep("HFD + VEH", 5)
+  #column_split[6:11] = "HFD + TAM"
+  #column_split[12:16] = "CHOW"
+
+    PLD_FAT_diff_ex_heat <- Heatmap(t(data_fat_diff_ex_num_scale), top_annotation = column_ha_fat, show_column_names = FALSE, 
+                                  show_row_names = FALSE, col = viridis(7), width = unit(4, "cm"), height = unit(17, "cm"), 
+                                  cluster_columns = FALSE, row_names_gp = gpar(fontsize = 6), column_split = column_split,
+                                  clustering_distance_rows = "pearson", border_gp = gpar(col = "black", lty = 1), 
+                                  heatmap_legend_param = list(legend_height = unit(4, "cm"), legend_width = unit(2, "cm")),
+                                  column_order = sort(colnames(t(data_fat_diff_ex_num_scale)), decreasing = TRUE))
+     
+    PLD_FAT_diff_ex_heat <- Heatmap(t(data_fat_diff_ex_num_scale), top_annotation = column_ha_fat, show_column_names = FALSE, 
+                                  show_row_names = FALSE, col = viridis(7), width = unit(4, "cm"), height = unit(17, "cm"), 
+                                  cluster_columns = FALSE, row_names_gp = gpar(fontsize = 6),
+                                  clustering_distance_rows = "pearson", border_gp = gpar(col = "black", lty = 1), 
+                                  heatmap_legend_param = list(legend_height = unit(4, "cm"), legend_width = unit(2, "cm")),
+                                  column_order = (colnames(t(data_fat_diff_ex_num_scale))), column_split = column_split)
+     
+  df_hfd_up_tam_down <- list(HFD_up = hfd_up, TAM_down = tam_down)
+  df_hfd_down_tam_up <- list(HFD_down = hfd_down, TAM_up = tam_up)
+```
+
+```{r, echo=FALSE, fig.height=8, fig.width=7}
+plot(PLD_fat_heat)
+plot(PLD_FAT_diff_ex_heat)
+```
+
+```{r, echo=FALSE, fig.height=5, fig.width=7}
+venn(df_hfd_up_tam_down, zcolor = c("#9590FF","#00C1AA"), sncs = 1.4, ilcs = 2.2, box = FALSE, opacity = 0.4)
+venn(df_hfd_down_tam_up, zcolor = c("#9590FF","#00C1AA"), sncs = 1.4, ilcs = 2.2, box = FALSE, opacity = 0.4)
+```
+
+```{r}
+miR_families <- read.delim("/Users/weiglm/Desktop/SENOMIR/MARKDOWN/miR_family_info.txt", header = TRUE, sep = "\t", dec = ".")
+miR_families_mmu_hsa <- miR_families[miR_families$Species.ID == "10090" | miR_families$Species.ID == "9606",]
+miR_families_mmu_hsa_con <- miR_families_mmu_hsa[miR_families_mmu_hsa$Family.Conservation. == "2" | miR_families_mmu_hsa$Family.Conservation. == "1",]
+list_hfd_up_tam_down <- paste("mmu-", intersect(df_hfd_up_tam_down$HFD_up, df_hfd_up_tam_down$TAM_down), sep="")
+list_hfd_down_tam_up <- paste("mmu-", intersect(df_hfd_down_tam_up$HFD_down, df_hfd_down_tam_up$TAM_up), sep="")
+
+n_families_down_up_total <- unique(miR_families[miR_families$MiRBase.ID %in% list_hfd_down_tam_up,]$miR.family)
+n_families_up_down_total <- unique(miR_families[miR_families$MiRBase.ID %in% list_hfd_up_tam_down,]$miR.family)
+length(n_families_down_up_total)
+length(n_families_up_down_total)
+
+list_hfd_up_tam_down_fam <- unique(miR_families_mmu_hsa_con[miR_families_mmu_hsa_con$MiRBase.ID %in% list_hfd_up_tam_down,]$miR.family)
+list_hfd_down_tam_up_fam <- unique(miR_families_mmu_hsa_con[miR_families_mmu_hsa_con$MiRBase.ID %in% list_hfd_down_tam_up,]$miR.family)
+
+list_pld_in_vitro_up <- list(HFD_up_TAM_down = list_hfd_up_tam_down_fam,
+                          ASC_up = list_family_up$ASC, HDF_up = list_family_up$HDF, HDMVEC_up = list_family_up$HDMVEC, HUVEC_up = list_family_up$HUVEC, RPTEC_up = list_family_up$RPTEC)
+
+list_pld_in_vitro_down <- list(HFD_down_TAM_up = list_hfd_down_tam_up_fam,
+                          ASC_down = list_family_down$ASC, HDF_down = list_family_down$HDF, HDMVEC_down = list_family_down$HDMVEC, HUVEC_down = list_family_down$HUVEC, RPTEC_down = list_family_down$RPTEC)
+
+vitro_up <-  upset(fromList(list_pld_in_vitro_up), nsets = 7, order.by = "degree", point.size = 3.5, line.size = 2,
+                 mainbar.y.label = "DE microRNA families (FDR < 0.15)", sets.x.label = "DE microRNA families per tissue")
+
+x1_fam_up <- unlist(list_pld_in_vitro_up, use.names = FALSE)
+x1_fam_up <- x1_fam_up[!duplicated(x1_fam_up)]
+rownames(vitro_up$New_data) <- x1_fam_up
+vitro_overlap <- vitro_up$New_data[rowSums(vitro_up$New_data[1]) >= 1,]
+vitro_overlap <- vitro_overlap[order(rowSums(vitro_overlap), decreasing = TRUE),]
+
+column_split = rep("in-vivo", 1)
+column_split[2:6] = "in-vitro"
+
+names(vitro_overlap) <- c("HFD_up - TAM_down", "ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+
+#vitro_overlap <- rbind(vitro_overlap[2,], vitro_overlap[1,], vitro_overlap[3:nrow(vitro_overlap),])
+
+
+vitro_heat_up <- Heatmap(vitro_overlap, cluster_rows = FALSE, cluster_columns = FALSE, 
+                         column_split = column_split, column_title_gp = gpar(fontsize = 17), row_names_gp = gpar(fontsize = 15),
+                         column_names_gp = gpar(fontsize = 15),
+        rect_gp = gpar(col = "black", lwd = 1), col = c("white", "#E76BF3"))
+
+vitro_down <-  upset(fromList(list_pld_in_vitro_down), nsets = 7, order.by = "degree", point.size = 3.5, line.size = 2,
+                 mainbar.y.label = "DE microRNA families (FDR < 0.15)", sets.x.label = "DE microRNA families per tissue")
+
+x1_fam_up <- unlist(list_pld_in_vitro_down, use.names = FALSE)
+x1_fam_up <- x1_fam_up[!duplicated(x1_fam_up)]
+rownames(vitro_down$New_data) <- x1_fam_up
+vitro_overlap_down <- vitro_down$New_data[rowSums(vitro_down$New_data[1]) >= 1,]
+vitro_overlap_down <- vitro_overlap_down[order(rowSums(vitro_overlap_down), decreasing = TRUE),]
+
+names(vitro_overlap_down) <- c("HFD_down - TAM_up", "ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+
+vitro_heat_down <- Heatmap(vitro_overlap_down, cluster_rows = FALSE, cluster_columns = FALSE, column_title_gp = gpar(fontsize = 17), row_names_gp = gpar(fontsize = 15),
+                         column_names_gp = gpar(fontsize = 15) , column_split = column_split,
+        rect_gp = gpar(col = "black", lwd = 1), col = c("white", "#00ABFD"))
+
+
+
+
+```
+
+```{r, echo=FALSE, fig.height=7, fig.width=6}
+plot(vitro_heat_up)
+plot(vitro_heat_down)
+
+```
+
+
+```{r, echo=FALSE}
+#make log2fc heatmaps for in-vitro/in-vivo data for miRNAs in overlapping miRNA families
+miRNA_CELL_ASC$miRNA <- str_remove_all(miRNA_CELL_ASC$miRNA, "hsa-")
+miRNA_CELL_HDF$miRNA <- str_remove_all(miRNA_CELL_HDF$miRNA, "hsa-")
+miRNA_CELL_HDMVEC$miRNA <- str_remove_all(miRNA_CELL_HDMVEC$miRNA, "hsa-")
+miRNA_CELL_HUVEC$miRNA <- str_remove_all(miRNA_CELL_HUVEC$miRNA, "hsa-")
+miRNA_CELL_RPTEC$miRNA <- str_remove_all(miRNA_CELL_RPTEC$miRNA, "hsa-")
+
+top_families <- c("miR-34-5p/449-5p", "miR-221-3p/222-3p", "miR-23-3p", "miR-329-3p/362-3p", "miR-411-3p", "miR-24-3p", "miR-431-5p", "miR-27-3p", "miR-299-3p")
+top_families_down <- c("miR-26-5p", "miR-378-3p")
+
+miR_families_top <- miR_families_mmu_hsa_con[miR_families_mmu_hsa_con$miR.family %in% top_families,]
+miR_families_top_hsa <- str_subset(miR_families_top$MiRBase.ID, "hsa-")
+miR_families_top_hsa <- str_remove_all(miR_families_top_hsa, "hsa-")
+miR_families_hsa
+miR_families_top_down <- miR_families_mmu_hsa_con[miR_families_mmu_hsa_con$miR.family %in% top_families_down,]
+miR_families_top_down_hsa <- str_subset(miR_families_top_down$MiRBase.ID, "hsa-")
+miR_families_top_down_hsa <- str_remove_all(miR_families_top_down_hsa, "hsa-")
+
+list_miRNAs <- c(str_remove_all(list_hfd_up_tam_down, "mmu-"), str_remove_all(list_hfd_down_tam_up, "mmu-"))
+list_miRNAs <- paste("mmu-", list_miRNAs, sep = "")
+list_miRNAs <- list_miRNAs[list_miRNAs %in% miR_families_top$MiRBase.ID]
+list_miRNAs <- str_remove_all(list_miRNAs, "mmu-")
+
+list_miRNAs_down <- c(str_remove_all(list_hfd_down_tam_up, "mmu-"), str_remove_all(list_hfd_down_tam_up, "mmu-"))
+list_miRNAs_down <- paste("mmu-", list_miRNAs_down, sep = "")
+list_miRNAs_down <- list_miRNAs_down[list_miRNAs_down %in% miR_families_top_down$MiRBase.ID]
+list_miRNAs_down <- str_remove_all(list_miRNAs_down, "mmu-")
+list_miRNAs_down <- unique(list_miRNAs_down)
+
+#adapt miR-299a-3p to miR-299-3p for hsa
+#list_miRNAs_hsa <- replace(list_miRNAs, list_miRNAs == "miR-299a-3p", "miR-299-3p")
+#anyhow, let's change the order according to miRNA families in figure manually
+list_miRNAs <- c("miR-34b-5p", "miR-34c-5p", "miR-221-3p", "miR-222-3p", "miR-23b-3p", "miR-329-3p", "miR-379-3p", "miR-24-3p", "miR-431-5p", "miR-27b-3p", "miR-299a-3p")
+list_miRNAs_hsa <- c("miR-34b-5p", "miR-34c-5p", "miR-221-3p", "miR-222-3p", "miR-23b-3p", "miR-329-3p", "miR-379-3p", "miR-24-3p", "miR-431-5p", "miR-27b-3p", "miR-299-3p")
+
+list_asc <- miRNA_CELL_ASC[miRNA_CELL_ASC$FDR < 0.15 & miRNA_CELL_ASC$miRNA %in% miR_families_top_hsa,]$miRNA
+list_hdf <- miRNA_CELL_HDF[miRNA_CELL_HDF$FDR < 0.15 & miRNA_CELL_HDF$miRNA %in% miR_families_top_hsa,]$miRNA
+list_hdmvec <- miRNA_CELL_HDMVEC[miRNA_CELL_HDMVEC$FDR < 0.15 & miRNA_CELL_HDMVEC$miRNA %in% miR_families_top_hsa,]$miRNA
+list_huvec <- miRNA_CELL_HUVEC[miRNA_CELL_HUVEC$FDR < 0.15 & miRNA_CELL_HUVEC$miRNA %in% miR_families_top_hsa,]$miRNA
+list_rptec <- miRNA_CELL_RPTEC[miRNA_CELL_RPTEC$FDR < 0.15 & miRNA_CELL_RPTEC$miRNA %in% miR_families_top_hsa,]$miRNA
+list_all_in_vitro <- unique(c(list_asc, list_hdf, list_hdmvec, list_huvec, list_rptec))
+
+list_asc_down <- miRNA_CELL_ASC[miRNA_CELL_ASC$FDR < 0.15 & miRNA_CELL_ASC$miRNA %in% miR_families_top_down_hsa,]$miRNA
+list_hdf_down <- miRNA_CELL_HDF[miRNA_CELL_HDF$FDR < 0.15 & miRNA_CELL_HDF$miRNA %in% miR_families_top_down_hsa,]$miRNA
+list_hdmvec_down <- miRNA_CELL_HDMVEC[miRNA_CELL_HDMVEC$FDR < 0.15 & miRNA_CELL_HDMVEC$miRNA %in% miR_families_top_down_hsa,]$miRNA
+list_huvec_down <- miRNA_CELL_HUVEC[miRNA_CELL_HUVEC$FDR < 0.15 & miRNA_CELL_HUVEC$miRNA %in% miR_families_top_down_hsa,]$miRNA
+list_rptec_down <- miRNA_CELL_RPTEC[miRNA_CELL_RPTEC$FDR < 0.15 & miRNA_CELL_RPTEC$miRNA %in% miR_families_top_down_hsa,]$miRNA
+list_all_in_vitro_down <- unique(c(list_asc_down, list_hdf_down, list_hdmvec_down, list_huvec_down, list_rptec_down))
+
+order_list_all_in_vitro <- c("miR-34a-5p", "miR-34c-5p", "miR-449a", "miR-449b-5p", "miR-221-3p", "miR-222-3p", "miR-23a-3p",
+"miR-23b-3p", "miR-329-3p", "miR-362-3p", "miR-411-3p", "miR-379-3p", "miR-24-3p", "miR-431-5p", "miR-27a-3p", "miR-27b-3p", "miR-299-3p")
+order_list_all_in_vitro_down <- c("miR-26a-5p", "miR-26b-5p", "miR-378a-3p", "miR-378d", "miR-378i")
+
+list_all_in_vitro <- order_list_all_in_vitro
+list_all_in_vitro_down <- order_list_all_in_vitro_down
+
+#make data frames
+#UPREGULATED
+#mean_z_pld <- data.frame(HFD_VEH = c(colMeans(data_fat_diff_ex_num_scale[1:5, 1:ncol(data_fat_diff_ex_num_scale)])),
+#                         HFD_TAM = c(colMeans(data_fat_diff_ex_num_scale[6:11, 1:ncol(data_fat_diff_ex_num_scale)])),
+#                         CHOW_VEH = c(colMeans(data_fat_diff_ex_num_scale[12:16, 1:ncol(data_fat_diff_ex_num_scale)])))
+mean_z_pld <- data.frame(CHOW_VEH = c(colMeans(data_fat_diff_ex_num_scale[1:5, 1:ncol(data_fat_diff_ex_num_scale)])),
+                         HFD_VEH = c(colMeans(data_fat_diff_ex_num_scale[6:10, 1:ncol(data_fat_diff_ex_num_scale)])),
+                         HFD_TAM = c(colMeans(data_fat_diff_ex_num_scale[11:16, 1:ncol(data_fat_diff_ex_num_scale)])))
+
+pld_log2fc <- data.frame(matrix(NA, ncol = 3, nrow = length(list_miRNAs)))
+in_vitro_log2fc <- data.frame(matrix(NA, ncol = 5, nrow = length(list_all_in_vitro)))
+asc_log2fc <- data.frame(matrix(NA, ncol = 1, nrow = length(list_asc)))
+hdf_log2fc <- data.frame(matrix(NA, ncol = 1, nrow = length(list_hdf)))
+hdmvec_log2fc <- data.frame(matrix(NA, ncol = 1, nrow = length(list_hdmvec)))
+huvec_log2fc <- data.frame(matrix(NA, ncol = 1, nrow = length(list_huvec)))
+rptec_log2fc <- data.frame(matrix(NA, ncol = 1, nrow = length(list_rptec)))
+
+rownames(pld_log2fc) <- list_miRNAs
+rownames(in_vitro_log2fc) <- list_all_in_vitro
+rownames(asc_log2fc) <- list_asc
+rownames(hdf_log2fc) <- list_hdf
+rownames(hdmvec_log2fc) <- list_hdmvec
+rownames(huvec_log2fc) <- list_huvec
+rownames(rptec_log2fc) <- list_rptec
+
+for (i in list_miRNAs) {
+  pld_log2fc[,1][rownames(pld_log2fc) == i] <- c(mean_z_pld[rownames(mean_z_pld) == i,]$CHOW_VEH)
+  pld_log2fc[,2][rownames(pld_log2fc) == i] <- c(mean_z_pld[rownames(mean_z_pld) == i,]$HFD_VEH)
+  pld_log2fc[,3][rownames(pld_log2fc) == i] <- c(mean_z_pld[rownames(mean_z_pld) == i,]$HFD_TAM) }
+for (i in list_all_in_vitro) {
+  in_vitro_log2fc[,1][rownames(in_vitro_log2fc) == i] <- if (any(miRNA_CELL_ASC$miRNA %in% i)) {c(miRNA_CELL_ASC[miRNA_CELL_ASC$miRNA == i,]$logFC)} else {NA} 
+  in_vitro_log2fc[,2][rownames(in_vitro_log2fc) == i] <- if (any(miRNA_CELL_HDF$miRNA %in% i)) {c(miRNA_CELL_HDF[miRNA_CELL_HDF$miRNA == i,]$logFC)} else {NA} 
+  in_vitro_log2fc[,3][rownames(in_vitro_log2fc) == i] <- if (any(miRNA_CELL_HDMVEC$miRNA %in% i)) {c(miRNA_CELL_HDMVEC[miRNA_CELL_HDMVEC$miRNA == i,]$logFC)} else {NA} 
+  in_vitro_log2fc[,4][rownames(in_vitro_log2fc) == i] <- if (any(miRNA_CELL_HUVEC$miRNA %in% i)) {c(miRNA_CELL_HUVEC[miRNA_CELL_HUVEC$miRNA == i,]$logFC)} else {NA} 
+  in_vitro_log2fc[,5][rownames(in_vitro_log2fc) == i] <- if (any(miRNA_CELL_RPTEC$miRNA %in% i)) {c(miRNA_CELL_RPTEC[miRNA_CELL_RPTEC$miRNA == i,]$logFC)} else {NA} 
+}
+for (i in list_asc) {
+  asc_log2fc[,1][rownames(list_asc) == i] <- if (any(miRNA_CELL_ASC$miRNA %in% i)) {c(miRNA_CELL_ASC[miRNA_CELL_ASC$miRNA == i,]$logFC)} else {NA}
+}
+for (i in list_hdf) {
+  hdf_log2fc[,1][rownames(list_hdf) == i] <- if (any(miRNA_CELL_HDF$miRNA %in% i)) {c(miRNA_CELL_HDF[miRNA_CELL_HDF$miRNA == i,]$logFC)} else {NA}
+}
+for (i in list_hdmvec) {
+  hdmvec_log2fc[,1][rownames(list_hdmvec) == i] <- if (any(miRNA_CELL_HDMVEC$miRNA %in% i)) {c(miRNA_CELL_HDMVEC[miRNA_CELL_HDMVEC$miRNA == i,]$logFC)} else {NA}
+}
+for (i in list_huvec) {
+  huvec_log2fc[,1][rownames(list_huvec) == i] <- if (any(miRNA_CELL_HUVEC$miRNA %in% i)) {c(miRNA_CELL_HUVEC[miRNA_CELL_HUVEC$miRNA == i,]$logFC)} else {NA}
+}
+for (i in list_rptec) {
+  rptec_log2fc[,1][rownames(list_rptec) == i] <- if (any(miRNA_CELL_RPTEC$miRNA %in% i)) {c(miRNA_CELL_RPTEC[miRNA_CELL_RPTEC$miRNA == i,]$logFC)} else {NA}
+}
+
+
+colnames(pld_log2fc) <- c("CHOW + VEH", "HFD + VEH", "HFD + TAM")
+colnames(in_vitro_log2fc) <- c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+
+#make data frames
+#DOWNREGULATED
+pld_log2fc_down <- data.frame(matrix(NA, ncol = 3, nrow = length(list_miRNAs_down)))
+in_vitro_log2fc_down <- data.frame(matrix(NA, ncol = 5, nrow = length(list_all_in_vitro_down)))
+asc_log2fc_down <- data.frame(matrix(NA, ncol = 1, nrow = length(list_asc_down)))
+hdf_log2fc_down <- data.frame(matrix(NA, ncol = 1, nrow = length(list_hdf_down)))
+hdmvec_log2fc_down <- data.frame(matrix(NA, ncol = 1, nrow = length(list_hdmvec_down)))
+huvec_log2fc_down <- data.frame(matrix(NA, ncol = 1, nrow = length(list_huvec_down)))
+rptec_log2fc_down <- data.frame(matrix(NA, ncol = 1, nrow = length(list_rptec_down)))
+
+rownames(pld_log2fc_down) <- list_miRNAs_down
+rownames(in_vitro_log2fc_down) <- list_all_in_vitro_down
+rownames(asc_log2fc_down) <- list_asc_down
+rownames(hdf_log2fc_down) <- list_hdf_down
+rownames(hdmvec_log2fc_down) <- list_hdmvec_down
+rownames(huvec_log2fc_down) <- list_huvec_down
+rownames(rptec_log2fc_down) <- list_rptec_down
+
+for (i in list_miRNAs_down) {
+  pld_log2fc_down[,1][rownames(pld_log2fc_down) == i] <- c(mean_z_pld[rownames(mean_z_pld) == i,]$CHOW_VEH)
+  pld_log2fc_down[,2][rownames(pld_log2fc_down) == i] <- c(mean_z_pld[rownames(mean_z_pld) == i,]$HFD_VEH)
+  pld_log2fc_down[,3][rownames(pld_log2fc_down) == i] <- c(mean_z_pld[rownames(mean_z_pld) == i,]$HFD_TAM) }
+
+for (i in list_all_in_vitro_down) {
+  in_vitro_log2fc_down[,1][rownames(in_vitro_log2fc_down) == i] <- if (any(miRNA_CELL_ASC$miRNA %in% i)) {c(miRNA_CELL_ASC[miRNA_CELL_ASC$miRNA == i,]$logFC)} else {NA} 
+  in_vitro_log2fc_down[,2][rownames(in_vitro_log2fc_down) == i] <- if (any(miRNA_CELL_HDF$miRNA %in% i)) {c(miRNA_CELL_HDF[miRNA_CELL_HDF$miRNA == i,]$logFC)} else {NA} 
+  in_vitro_log2fc_down[,3][rownames(in_vitro_log2fc_down) == i] <- if (any(miRNA_CELL_HDMVEC$miRNA %in% i)) {c(miRNA_CELL_HDMVEC[miRNA_CELL_HDMVEC$miRNA == i,]$logFC)} else {NA} 
+  in_vitro_log2fc_down[,4][rownames(in_vitro_log2fc_down) == i] <- if (any(miRNA_CELL_HUVEC$miRNA %in% i)) {c(miRNA_CELL_HUVEC[miRNA_CELL_HUVEC$miRNA == i,]$logFC)} else {NA} 
+  in_vitro_log2fc_down[,5][rownames(in_vitro_log2fc_down) == i] <- if (any(miRNA_CELL_RPTEC$miRNA %in% i)) {c(miRNA_CELL_RPTEC[miRNA_CELL_RPTEC$miRNA == i,]$logFC)} else {NA} 
+}
+for (i in list_asc_down) {
+  asc_log2fc_down[,1][rownames(list_asc_down) == i] <- if (any(miRNA_CELL_ASC$miRNA %in% i)) {c(miRNA_CELL_ASC[miRNA_CELL_ASC$miRNA == i,]$logFC)} else {NA}
+}
+for (i in list_hdf_down) {
+  hdf_log2fc_down[,1][rownames(list_hdf_down) == i] <- if (any(miRNA_CELL_HDF$miRNA %in% i)) {c(miRNA_CELL_HDF[miRNA_CELL_HDF$miRNA == i,]$logFC)} else {NA}
+}
+for (i in list_hdmvec_down) {
+  hdmvec_log2fc_down[,1][rownames(list_hdmvec_down) == i] <- if (any(miRNA_CELL_HDMVEC$miRNA %in% i)) {c(miRNA_CELL_HDMVEC[miRNA_CELL_HDMVEC$miRNA == i,]$logFC)} else {NA}
+}
+for (i in list_huvec_down) {
+  huvec_log2fc_down[,1][rownames(list_huvec_down) == i] <- if (any(miRNA_CELL_HUVEC$miRNA %in% i)) {c(miRNA_CELL_HUVEC[miRNA_CELL_HUVEC$miRNA == i,]$logFC)} else {NA}
+}
+for (i in list_rptec_down) {
+  rptec_log2fc_down[,1][rownames(list_rptec_down) == i] <- if (any(miRNA_CELL_RPTEC$miRNA %in% i)) {c(miRNA_CELL_RPTEC[miRNA_CELL_RPTEC$miRNA == i,]$logFC)} else {NA}
+}
+
+mean_z_pld <- data.frame(HFD_VEH = c(colMeans(data_fat_diff_ex_num_scale[1:5, 1:ncol(data_fat_diff_ex_num_scale)])),
+                         HFD_TAM = c(colMeans(data_fat_diff_ex_num_scale[6:11, 1:ncol(data_fat_diff_ex_num_scale)])),
+                         CHOW_VEH = c(colMeans(data_fat_diff_ex_num_scale[12:16, 1:ncol(data_fat_diff_ex_num_scale)])))
+
+colnames(pld_log2fc_down) <- c("CHOW + VEH", "HFD + VEH", "HFD + TAM")
+colnames(in_vitro_log2fc_down) <- c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+
+
+#splitting pattern for UPREGULATED HEATMAP
+column_split = rep("in-vivo", 3)
+column_split[4:8] = "in-vitro"
+
+row_split = rep("miR-34-5p/449-5p", 2)
+row_split[3:4] = "miR-221-3p/222-3p"
+row_split[5] = "miR-23-3p"
+row_split[6] = "miR-329-3p/362-3p"
+row_split[7] = "miR-411-3p"
+row_split[8] = "miR-24-3p"
+row_split[9] = "miR-431-5p"
+row_split[10] = "miR-27-3p"
+row_split[11] = "miR-299-3p"
+row_split <- factor(row_split, levels=unique(row_split))
+
+
+h1 <- Heatmap(pld_log2fc, show_column_names = TRUE, show_row_names = TRUE, row_names_side = "left", row_gap = unit(4, "mm"), column_gap = unit(8, "mm"), row_split = row_split, row_title_side = "left",
+              row_title_rot = 0,
+        col = viridis(15), width = unit(3, "cm"), height = unit(12, "cm"), cluster_columns = FALSE, cluster_rows = FALSE, row_names_gp = gpar(fontsize = 9),
+        border_gp = gpar(col = "black", lty = 1), heatmap_legend_param = list(legend_height = unit(4, "cm"), legend_width = unit(2, "cm")))
+h1
+pld_log2fc_down <- pld_log2fc_down[order(row.names(pld_log2fc_down)), ]
+row_split_down_pld = rep("miR-26a-5p", 1)
+row_split_down_pld[2] = rep("miR-378c", 1)
+
+h1_down <- Heatmap(pld_log2fc_down, show_column_names = TRUE, show_row_names = TRUE, row_names_side = "left", row_gap = unit(4, "mm"), column_gap = unit(8, "mm"), row_title_side = "left", row_split = row_split_down_pld,
+              row_title_rot = 0,
+        col = viridis(15), width = unit(3, "cm"), height = unit(7, "cm"), cluster_columns = FALSE, cluster_rows = FALSE, row_names_gp = gpar(fontsize = 9),
+        border_gp = gpar(col = "black", lty = 1), heatmap_legend_param = list(legend_height = unit(4, "cm"), legend_width = unit(2, "cm")))
+
+h1_down
+row_split = rep("miR-34-5p/449-5p", 4)
+row_split[5:6] = "miR-221-3p/222-3p"
+row_split[7:8] = "miR-23-3p"
+row_split[9:10] = "miR-329-3p/362-3p"
+row_split[11:12] = "miR-411-3p"
+row_split[13] = "miR-24-3p"
+row_split[14] = "miR-431-5p"
+row_split[15:16] = "miR-27-3p"
+row_split[17] = "miR-299-3p"
+
+row_split <- factor(row_split, levels=unique(row_split))
+
+h2 <- Heatmap(in_vitro_log2fc, show_column_names = TRUE, show_row_names = TRUE, width = unit(4.5, "cm"), height = unit(14, "cm"), cluster_columns = FALSE, cluster_rows = FALSE, row_names_gp = gpar(fontsize = 9),
+        col = colorRamp2(seq(0, 6, length = 2), c("white", "red")), border_gp = gpar(col = "black", lty = 1), row_gap = unit(4, "mm"), column_gap = unit(8, "mm"), row_split = row_split, row_title_rot = 0,
+        row_title_side = "right",
+        heatmap_legend_param = list(legend_height = unit(4, "cm"), legend_width = unit(2, "cm")), cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.1f", in_vitro_log2fc[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+h2
+
+ht1 <- Heatmap(t(pld_log2fc), show_column_names = TRUE, show_row_names = TRUE, row_names_side = "right", column_names_side =  "top", row_gap = unit(8, "mm"), column_gap = unit(8, "mm"),
+        col = viridis(15), width = unit(11, "cm"), height = unit(3, "cm"), cluster_columns = FALSE, cluster_rows = FALSE, row_names_gp = gpar(fontsize = 9),
+        border_gp = gpar(col = "black", lty = 1), heatmap_legend_param = list(legend_height = unit(4, "cm"), legend_width = unit(2, "cm")))
+
+ht2 <- Heatmap(t(in_vitro_log2fc), show_column_names = TRUE, show_row_names = TRUE, width = unit(11, "cm"), height = unit(3.5, "cm"), cluster_columns = FALSE, cluster_rows = FALSE, row_names_gp = gpar(fontsize = 9),
+        col = colorRamp2(seq(0, 6, length = 2), c("white", "red")), border_gp = gpar(col = "black", lty = 1), row_gap = unit(8, "mm"), column_gap = unit(8, "mm"),
+        heatmap_legend_param = list(legend_height = unit(4, "cm"), legend_width = unit(2, "cm")), cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.1f", t(in_vitro_log2fc)[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+#DOWN
+
+row_split_down = rep("miR-26-5p", 2)
+row_split_down[3:5] = "miR-378-3p"
+
+row_split_down <- factor(row_split_down, levels=unique(row_split_down))
+
+ht2_down <- Heatmap(in_vitro_log2fc_down, show_column_names = TRUE, show_row_names = TRUE, width = unit(4.5, "cm"), height = unit(5, "cm"), cluster_columns = FALSE, cluster_rows = FALSE, 
+                    row_names_gp = gpar(fontsize = 9), col = colorRamp2(seq(-2, 2, length = 2), c("lightblue", "white")), border_gp = gpar(col = "black", lty = 1), row_gap = unit(8, "mm"), row_split = row_split_down,
+                    row_title_rot = 0, row_title_side = "right", column_gap = unit(8, "mm"), heatmap_legend_param = list(legend_height = unit(4, "cm"), legend_width = unit(2, "cm")), 
+                    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.1f", (in_vitro_log2fc_down)[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+ht2_down
+
+```
+```{r, echo=FALSE}
+
+#####
+#Figure on qPCR data
+#####
+
+# IMPORT TISSUE qPCR DATA ALL
+data_PLD_qPCR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/05-new-cohorts-2022/03-CF-cohort/01-qPCR/230818_PLD_FAT_qPCR_R.txt", header = TRUE, sep = "\t", dec = ".") 
+data_PLD_qPCR$SampleID <- as.factor(data_PLD_qPCR$SampleID)
+data_PLD_qPCR$Tissue <- as.factor(data_PLD_qPCR$Tissue)
+data_PLD_qPCR$Diet <- as.factor(data_PLD_qPCR$Diet)
+data_PLD_qPCR$Group <- toupper(data_PLD_qPCR$Group)
+
+#data_all_qPCR$Group <- factor(data_all_qPCR$Group, levels = c("YOUNG", "AGED"))
+data_PLD_qPCR$Group <- factor(data_PLD_qPCR$Group, levels = c("CHOW_VEH", "CHOW_TAM", "HFD_VEH", "HFD_TAM"))
+
+PLD_qPCR_p16 <- ggplot(data_PLD_qPCR, aes(x=Group, y=p16, fill=Group)) + 
+  geom_boxplot(width = 0.9, lwd = 1.3, fill = "white") + geom_dotplot(binaxis = 'y', stackdir = 'center', position = "dodge", dotsize = 1.3, stroke = 3.2) +
+  scale_fill_manual(values = c("darkblue", "lightblue", "#C77CFF", "green")) + scale_x_discrete(labels = c("CHOW + VEH", "CHOW + TAM", "HFD + VEH", "HFD + TAM")) +
+  ggtitle("p16") + theme(plot.title = element_text(size=20, face="italic", hjust=0.5)) +
+  theme(axis.text.x = element_text(face="plain", color="black", size=15, angle = 90)) +
+  theme(axis.text.y = element_text(face="plain", color="black", size=17)) +
+  theme(legend.position = "none", legend.title = element_text(color="black", size=18, face="bold"), legend.text = element_text(color="black", size=18)) +
+  theme(axis.title.x = element_text(color = "white", size =15, face = "bold"),axis.title.y = element_text(color = "black", size =18, face = "plain")) +
+  scale_y_continuous(name="TBP normalized dCq", limits = c()) + theme(legend.key.size = unit(1.3, "cm")) +
+  theme(strip.text= element_text(size=14, face="plain"), 
+        panel.border = element_rect(colour = "black", fill = NA, size = 2),
+        panel.background = element_rect(fill = "white"),
+        panel.grid.major = element_line(size = 0.5, linetype = "dashed", colour = "lightgrey"),
+        panel.grid.minor = element_line(size = 0.5, linetype = "dashed", colour = "lightgrey")) +
+  theme(strip.background = element_rect(color = "white", fill = "white", size = 1.5, linetype = "solid"))
+
+print(PLD_qPCR_p16)
+
+PLD_qPCR_p21 <- ggplot(data_PLD_qPCR, aes(x=Group, y=p21, fill=Group)) + 
+  geom_boxplot(width = 0.9, lwd = 1.3, fill = "white") + geom_dotplot(binaxis = 'y', stackdir = 'center', position = "dodge", dotsize = 1.3, stroke = 3.2) +
+  scale_fill_manual(values = c("darkblue", "lightblue", "#C77CFF", "green")) + scale_x_discrete(labels = c("CHOW + VEH", "CHOW + TAM", "HFD + VEH", "HFD + TAM")) +
+  ggtitle("p21") + theme(plot.title = element_text(size=20, face="italic", hjust=0.5)) +
+  theme(axis.text.x = element_text(face="plain", color="black", size=15, angle = 90)) +
+  theme(axis.text.y = element_text(face="plain", color="black", size=17)) +
+  theme(legend.position = "none", legend.title = element_text(color="black", size=18, face="bold"), legend.text = element_text(color="black", size=18)) +
+  theme(axis.title.x = element_text(color = "white", size =15, face = "bold"),axis.title.y = element_text(color = "black", size =18, face = "plain")) +
+  scale_y_continuous(name="TBP normalized dCq", limits = c()) + theme(legend.key.size = unit(1.3, "cm")) +
+  theme(strip.text= element_text(size=14, face="plain"), 
+        panel.border = element_rect(colour = "black", fill = NA, size = 2),
+        panel.background = element_rect(fill = "white"),
+        panel.grid.major = element_line(size = 0.5, linetype = "dashed", colour = "lightgrey"),
+        panel.grid.minor = element_line(size = 0.5, linetype = "dashed", colour = "lightgrey")) +
+  theme(strip.background = element_rect(color = "white", fill = "white", size = 1.5, linetype = "solid"))
+
+
+
+png("/Users/weiglm/Desktop/SENOMIR/03-MAYO/05-new-cohorts-2022/03-CF-cohort/01-qPCR/PLD_p16_qPCR.png", width = 700, height = 600,
+    res = 120)
+print(PLD_qPCR_p16)
+dev.off()
+
+png("/Users/weiglm/Desktop/SENOMIR/03-MAYO/05-new-cohorts-2022/03-CF-cohort/01-qPCR/PLD_p21_qPCR.png", width = 700, height = 600,
+    res = 120)
+print(PLD_qPCR_p21)
+dev.off()
+
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

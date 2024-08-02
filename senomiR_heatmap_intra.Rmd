@@ -1,0 +1,856 @@
+---
+title: "senomiR_heatmap_intracellular"
+output: html_document
+date: "2023-05-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(devtools)
+library(factoextra)
+library(ggplot2)
+library(ggplotify)
+library(ggpubr)
+library(pheatmap)
+library(RColorBrewer)
+library(viridis)
+library(stringr)
+library(UpSetR)
+library(ComplexHeatmap)
+library(psych)
+library(Hmisc)
+library(utils)
+# ++++++++++++++++++++++++++++
+# flattenCorrMatrix
+# ++++++++++++++++++++++++++++
+# cormat : matrix of the correlation coefficients
+# pmat : matrix of the correlation p-values
+flattenCorrMatrix <- function(cormat, pmat) {
+  ut <- upper.tri(cormat)
+  data.frame(
+    row = rownames(cormat)[row(cormat)[ut]],
+    column = rownames(cormat)[col(cormat)[ut]],
+    cor  =(cormat)[ut],
+    p = pmat[ut]
+    )
+}
+
+flattenCorrMatrix_adapt <- function(cormat, pmat) {
+  data.frame(
+    microRNA = rownames(cormat)[row(cormat)],
+    gene = colnames(cormat)[col(cormat)],
+    cor = c(cormat),
+    p = c(pmat)
+  )
+}
+```
+
+## microRNA expression in five senescent cell types
+
+#Reanalysis of unsupervised heatmap clustering including the newly generated RPTEC data. Data was filtered for microRNAs detectable with a mean RPM > 10. The top 150 miRNAs according to CV% were used for drawing a heatmap.
+
+```{r, echo = FALSE, results='hide', message=FALSE, warning=FALSE, fig.show='hide'}
+selection <- c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+data_cell <- read.delim("/Users/weiglm/Desktop/SENOMIR/01-NGS-data-analysis/CELL_RPM_RPTEC23_R.txt", header = TRUE, sep = "\t", dec = ".")
+data_cell_raw <- read.delim("/Users/weiglm/Desktop/SENOMIR/01-NGS-data-analysis/CELL_RAW_R.txt", header = TRUE, sep = "\t", dec = ".")
+cols <- c("SampleID", "Cell_type", "Condition", "Matrix")
+data_cell[cols] <- lapply(data_cell[cols], factor)
+
+#subset
+data_cell <- data_cell[data_cell$Cell_type %in% selection,]
+data_cell_raw <- data_cell_raw[data_cell_raw$Cell_type %in% selection,]
+
+#sort dfs according to mean raw reads (per column) ## NOTE SCRIPT NEEDS TO BE CHANGED SO MICRORNAS WITH < 10 RAW READS ARE REMOVED INSTEAD OF SELECTING FOR > 10 07.02.2022
+#create list with means and then vector for sorting df
+cell_mean_order <- data_cell[5:ncol(data_cell)][,order(colMeans(data_cell[5:ncol(data_cell)], na.rm = TRUE), decreasing = TRUE)]
+cell_mean_v <- c("SampleID", "Cell_type", "Condition", "Matrix", colnames(cell_mean_order))
+data_cell <- data_cell[cell_mean_v]
+cell_mean_list <- colMeans(data_cell[5:ncol(data_cell)], na.rm = TRUE)
+#extract miRNAs with average RPM above threshold (thre) - extracted dataframes get extension "_thre"
+thre <- 10
+length(names(cell_mean_list[cell_mean_list > thre]))
+thre_cell_v <- c("SampleID", "Cell_type", "Condition", "Matrix", names(cell_mean_list[cell_mean_list > thre]))
+data_cell_thre <- data_cell %>% select(thre_cell_v)
+colnames(data_cell_thre) <- str_remove_all(colnames(data_cell_thre), "hsa.")
+colnames(data_cell_thre) <- gsub("\\.", "-", colnames(data_cell_thre))
+#CELL
+cv_list_cell <- list()
+loop_cell <- colnames(data_cell_thre[5:ncol(data_cell_thre)])
+
+for(i in loop_cell) {
+  cv_list_cell[[i]] <- (sd(data_cell_thre[,i])/mean(data_cell_thre[,i]))*100
+}
+#make df out of list with cv and sort from high to low
+#top n miRNAs to be used
+n <- 300
+df_cv_cell <- data.frame(names(cv_list_cell), (unlist(cv_list_cell)))
+colnames(df_cv_cell) <- c("microRNA", "CV")
+df_cv_cell <- df_cv_cell[order(df_cv_cell$CV, decreasing = TRUE),]
+miR_v_cell <- c("SampleID", "Cell_type", "Condition", "Matrix", df_cv_cell$microRNA[1:n])
+
+#CREATE HEATMAP
+colors_cell_type <- c("#9590FF", "#F37B59", "#00C1AA", "#00ABFD", "#E76BF3")
+Cell_type <- colors_cell_type[1:length(selection)]
+names(Cell_type) <- selection
+Condition <- c("darkblue", "mediumorchid2")
+names(Condition) <- c("QUI", "SIPS")
+ann_colors <- list(Cell_type = Cell_type, Condition = Condition)
+
+data_cell_thre <- data_cell_thre %>% select((miR_v_cell))
+rownames(data_cell_thre) <- data_cell_thre$SampleID
+pos_cell <- data.frame("Cell_type" = data_cell_thre$Cell_type, "Condition" = data_cell_thre$Condition)
+rownames(pos_cell) <- rownames(data_cell_thre)
+
+cell_num <- data_cell_thre[,5:ncol(data_cell_thre)]
+cell_num_scale <- scale(cell_num, center = TRUE, scale = TRUE)
+rownames(cell_num_scale) <- rownames(data_cell_thre)
+rownames(cell_num_scale)
+#cell_heat <- as.ggplot(pheatmap(t(cell_num_scale), 
+#                                annotation_col = pos_cell, 
+#                                annotation_colors = ann_colors, 
+#                                main = paste("mean_RPM > ",thre," top ",n," microRNAs CV%"), fontsize_row = 6, border_col = "black",
+#                                cellwidth = 6, cellheight = 2.5, clustering_distance_cols = "correlation", 
+#                                clustering_distance_rows = "correlation",
+#                                cluster_rows = TRUE, cluster_cols = TRUE, treeheight_row = 20, treeheight_col = 20,
+#                                show_colnames = FALSE, show_rownames = FALSE,
+#                                color = viridis(7)))
+
+column_ha = HeatmapAnnotation(Cell_type = pos_cell$Cell_type, Condition = pos_cell$Condition,
+                              col = list(Cell_type = ann_colors$Cell_type,
+                                         Condition = ann_colors$Condition),
+                              gp = gpar(col = "black"),
+                              simple_anno_size = unit(0.4, "cm"))
+
+cell_heat <- Heatmap(t(cell_num_scale), top_annotation = column_ha, show_column_names = FALSE, show_row_names = FALSE,
+        col = viridis(7), width = unit(6.5, "cm"), height = unit(15.6, "cm"), clustering_distance_columns = "pearson",
+        clustering_distance_rows = "pearson", border_gp = gpar(col = "black", lty = 1))
+
+png(file="/Users/weiglm/Desktop/SENOMIR/MARKDOWN/miRNA_heatmap_intra.png", width=350, height=850)
+print(cell_heat)
+dev.off()
+
+```
+
+## gene expression in five senescent cell types
+
+#Reanalysis of unsupervised heatmap clustering including the newly generated RPTEC data. Data was filtered for genes detectable with a mean RPM > 10. The top 150 miRNAs according to CV% were used for drawing a heatmap.
+```{r, echo = FALSE, results='hide', message=FALSE, warning=FALSE, fig.show='hide'}
+data_genes <- read.delim("/Users/weiglm/Desktop/SENOMIR/01-NGS-data-analysis/03-correlation-miRNA-genes/senomiR_NGS_genes_RPTEC23.txt", header = TRUE, sep = "\t", dec = ".")
+
+cols_genes <- c("Sample_ID", "Cell_type", "Condition")
+data_genes$Sample_ID <- as.factor(data_genes$Sample_ID)
+data_genes$Cell_type <- as.factor(data_genes$Cell_type)
+data_genes$Condition <- as.factor(data_genes$Condition)
+#data_genes[cols_genes] <- lapply(data_genes[cols], factor)
+selection <- c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+data_genes <- data_genes[data_genes$Cell_type %in% selection,]
+
+genes_mean_order <- data_genes[4:ncol(data_genes)][,order(colMeans(data_genes[4:ncol(data_genes)], na.rm = TRUE), decreasing = TRUE)]
+genes_mean_v <- c("Sample_ID", "Cell_type", "Condition", colnames(genes_mean_order))
+data_genes <- data_genes[genes_mean_v]
+genes_mean_list <- colMeans(data_genes[4:ncol(data_genes)], na.rm = TRUE)
+
+thre <- 10
+length(names(genes_mean_list[genes_mean_list > thre]))
+thre_genes_v <- c("Sample_ID", "Cell_type", "Condition", names(genes_mean_list[genes_mean_list > thre]))
+
+data_genes_thre <- data_genes %>% select(thre_genes_v)
+
+#CELL GENES
+cv_list_genes <- list()
+loop_genes <- colnames(data_genes_thre[4:ncol(data_genes_thre)])
+
+for (i in loop_genes) {
+  cv_list_genes[[i]] <- (sd(data_genes_thre[,i])/mean(data_genes_thre[,i]))*100
+}
+
+#make df out of list with cv and sort from high to low
+#top n miRNAs to be used
+n_genes <- 3000
+df_cv_genes <- data.frame(names(cv_list_genes), (unlist(cv_list_genes)))
+colnames(df_cv_genes) <- c("Gene", "CV")
+df_cv_genes <- df_cv_genes[order(df_cv_genes$CV, decreasing = TRUE),]
+genes_v <- c("Sample_ID", "Cell_type", "Condition", df_cv_genes$Gene[1:n_genes])
+
+data_genes_thre <- data_genes_thre %>% select(genes_v)
+rownames(data_genes_thre) <- data_genes_thre$Sample_ID
+
+pos_genes <- data.frame("Cell_type" = data_genes_thre$Cell_type, "Condition" = data_genes_thre$Condition)
+rownames(pos_genes) <- rownames(data_genes_thre)
+
+genes_num <- data_genes_thre[,4:ncol(data_genes_thre)]
+genes_num_scale <- scale(genes_num)
+rownames(genes_num_scale) <- rownames(data_genes_thre)
+
+colors_cell_type_gene <- c("#9590FF", "#00C1AA", "#F37B59","#00ABFD", "#E76BF3")
+Cell_type <- colors_cell_type_gene[1:length(selection)]
+names(Cell_type) <- unique(data_genes_thre$Cell_type)
+Condition <- c("darkblue", "mediumorchid2")
+names(Condition) <- c("QUI", "SIPS")
+ann_colors_gene <- list(Cell_type = Cell_type, Condition = Condition)
+
+column_ha_gene = HeatmapAnnotation(Cell_type = data_genes_thre$Cell_type, Condition = data_genes_thre$Condition,
+                              col = list(Cell_type = ann_colors_gene$Cell_type,
+                                         Condition = ann_colors_gene$Condition),
+                              gp = gpar(col = "black"),
+                              simple_anno_size = unit(0.4, "cm"))
+
+genes_heat <- as.ggplot(pheatmap(t(genes_num_scale), 
+                                 annotation_col = pos_genes, 
+                                 annotation_colors = ann_colors, main = paste("mean_rpm > ",thre," top ","n_genes"," genes CV%"), fontsize_row = 6, border_col = "black",
+                                 cellwidth = 7, cellheight = 0.6, clustering_distance_cols = "correlation", clustering_distance_rows = "correlation", cluster_cols = TRUE,
+                                 cluster_rows = TRUE, treeheight_row = 20, treeheight_col = 20,
+                                 show_colnames = FALSE, show_rownames = TRUE,
+                                 color = viridis(9)))
+
+gene_heat <- Heatmap(t(genes_num_scale), top_annotation = column_ha_gene, show_column_names = TRUE, show_row_names = FALSE,
+        col = viridis(7), width = unit(6.5, "cm"), height = unit(15, "cm"), clustering_distance_columns = "pearson",
+        clustering_distance_rows = "pearson", border_gp = gpar(col = "black", lty = 1), heatmap_legend_param = list(legend_height = unit(4, "cm"), legend_width = unit(2, "cm")))
+
+
+genes_df <- genes_num_scale[complete.cases(genes_num_scale),]
+
+```
+
+```{r, echo=FALSE, fig.height=12, fig.width=8}
+plot(cell_heat)
+plot(gene_heat)
+```
+
+```{r, echo=FALSE, fig.height=42, fig.width=8}
+plot(genes_heat)
+```
+
+
+```{r}
+library(venn)
+library(VennDiagram)
+#load microRNA DE data CELL
+miRNA_CELL_ASC <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/edgeR_miRNA_ASC.txt", header = TRUE, sep = "\t", dec = ".", na.strings = c("", NA))
+miRNA_CELL_HDF <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/edgeR_miRNA_HDF.txt", header = TRUE, sep = "\t", dec = ".", na.strings = c("", NA))
+miRNA_CELL_HDMVEC <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/edgeR_miRNA_HDMVEC.txt", header = TRUE, sep = "\t", dec = ".", na.strings = c("", NA))
+miRNA_CELL_HUVEC <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/edgeR_miRNA_HUVEC.txt", header = TRUE, sep = "\t", dec = ".", na.strings = c("", NA))
+miRNA_CELL_RPTEC <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/edgeR_miRNA_RPTEC.txt", header = TRUE, sep = "\t", dec = ".", na.strings = c("", NA))
+
+miRNA_CELL_ASC$miRNA <- as.factor(miRNA_CELL_ASC$miRNA)
+miRNA_CELL_HDF$miRNA <- as.factor(miRNA_CELL_HDF$miRNA)
+miRNA_CELL_HDMVEC$miRNA <- as.factor(miRNA_CELL_HDMVEC$miRNA)
+miRNA_CELL_HUVEC$miRNA <- as.factor(miRNA_CELL_HUVEC$miRNA)
+miRNA_CELL_RPTEC$miRNA <- as.factor(miRNA_CELL_RPTEC$miRNA)
+
+#load gene expression DE data
+gene_ASC <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/edgeR_gene_ASC.txt", header = TRUE, sep = "\t", dec = ",", na.strings = c("", NA))
+gene_HDF <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/edgeR_gene_HDF.txt", header = TRUE, sep = "\t", dec = ",", na.strings = c("", NA))
+gene_HDMVEC <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/edgeR_gene_HDMVEC.txt", header = TRUE, sep = "\t", dec = ",", na.strings = c("", NA))
+gene_HUVEC <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/edgeR_gene_HUVEC.txt", header = TRUE, sep = "\t", dec = ",", na.strings = c("", NA))
+gene_RPTEC <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/edgeR_gene_RPTEC.txt", header = TRUE, sep = "\t", dec = ",", na.strings = c("", NA))
+
+gene_ASC$external_gene_name <- as.factor(gene_ASC$external_gene_name)
+gene_HDF$external_gene_name <- as.factor(gene_HDF$external_gene_name)
+gene_HDMVEC$external_gene_name <- as.factor(gene_HDMVEC$external_gene_name)
+gene_HUVEC$external_gene_name <- as.factor(gene_HUVEC$external_gene_name)
+gene_RPTEC$external_gene_name <- as.factor(gene_RPTEC$external_gene_name)
+
+##microRNA data
+#remove spike-ins
+spike_ins <- c("#C", "#E", "#H", "#I", "#K", "#M", "#N", "#uniSp.2", "#uniSp.4", "#uniSp.5")
+selection <- c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+matrix <- c("CELL")
+
+df_list <- list(miRNA_CELL_ASC, miRNA_CELL_HDF, miRNA_CELL_HDMVEC, miRNA_CELL_HUVEC, miRNA_CELL_RPTEC)
+
+names(df_list) <- c("miRNA_CELL_ASC", "miRNA_CELL_HDF", "miRNA_CELL_HDMVEC", "miRNA_CELL_HUVEC", "miRNA_CELL_RPTEC")
+
+loop.selection <- c(paste("miRNA_", as.vector(outer(matrix, selection, paste, sep="_")), sep = ""))
+
+df_list_select <- list()
+for (i in loop.selection) {
+  df_list_select[[i]] <- df_list[[i]][!df_list[[i]]$miRNA %in% spike_ins,]
+  df_list_select[[i]] <- df_list[[i]][!df_list[[i]]$miRNA == "",]
+  }
+
+df_list_up <- list()
+for (i in names(df_list_select)) {
+  df_list_up[[i]] <- df_list_select[[i]][df_list_select[[i]]$FDR < 0.15 & df_list_select[[i]]$logFC > 0,]$miRNA
+}
+
+df_list_down <- list()
+for (i in names(df_list_select)) {
+  df_list_down[[i]] <- df_list_select[[i]][df_list_select[[i]]$FDR < 0.15 & df_list_select[[i]]$logFC < 0,]$miRNA
+}
+
+##gene data
+df_list_gene <- list(gene_ASC, gene_HDF, gene_HDMVEC, gene_HUVEC, gene_RPTEC)
+names(df_list_gene) <- c("gene_ASC", "gene_HDF", "gene_HDMVEC", "gene_HUVEC", "gene_RPTEC")
+
+#get external gene name and if empty ENSG annotation
+df_list_gene_up <- list()
+for (i in names(df_list_gene)) {
+  df_list_gene_up[[i]] <- rep(NA, times = nrow(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]))
+  
+  for (x in c(1:nrow(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]))) {
+  df_list_gene_up[[i]][x] <- if ((df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]$external_gene_name[x] == 'None') |
+                                 is.na(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]$external_gene_name[x])) 
+   {df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]$gene[x]} else
+  {as.character(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]$external_gene_name[x])}
+  }
+
+  }
+#get external gene name and if empty ENSG annotation
+df_list_gene_down <- list()
+for (i in names(df_list_gene)) {
+  df_list_gene_down[[i]] <- rep(NA, times = nrow(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]))
+  
+  for (x in c(1:nrow(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]))) {
+  df_list_gene_down[[i]][x] <- if ((df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]$external_gene_name[x] == 'None') |
+                                is.na(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]$external_gene_name[x]))
+  {df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]$gene[x]} else
+  {as.character(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]$external_gene_name[x])}
+  }
+
+  }
+
+#get external gene name and if empty ENSG annotation
+df_list_gene_up_ENSG <- list()
+for (i in names(df_list_gene)) {
+  df_list_gene_up_ENSG[[i]] <- rep(NA, times = nrow(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]))
+  
+  for (x in c(1:nrow(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]))) {
+  df_list_gene_up_ENSG[[i]][x] <- if ((df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]$external_gene_name[x] == 'None') |
+                                 is.na(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]$external_gene_name[x])) 
+   {df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]$gene[x]} else
+   {df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC > 0,]$gene[x]}
+  }
+}
+  
+
+#get external gene name and if empty ENSG annotation
+df_list_gene_down_ENSG <- list()
+for (i in names(df_list_gene)) {
+  df_list_gene_down_ENSG[[i]] <- rep(NA, times = nrow(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]))
+  
+  for (x in c(1:nrow(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]))) {
+  df_list_gene_down_ENSG[[i]][x] <- if ((df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]$external_gene_name[x] == 'None') |
+                                is.na(df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]$external_gene_name[x]))
+  {df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]$gene[x]} else
+  {df_list_gene[[i]][df_list_gene[[i]]$FDR < 0.15 & df_list_gene[[i]]$logFC < 0,]$gene[x]}
+  }
+
+}
+
+names(df_list_up) <- c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+names(df_list_down) <- c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+names(df_list_gene_up) <- c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+names(df_list_gene_down) <- c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+
+(length(df_list_gene_down$ASC) + length(df_list_gene_up$ASC))/8227
+
+```
+
+## miRNA overlaps in five senescent cell types
+
+```{r, echo=FALSE, fig.height=15, fig.width=8}
+venn(df_list_up, zcolor = c("#F37B59","#9590FF", "#00C1AA", "#00ABFD", "#E76BF3"), sncs = 1.2, ilcs = 1.9, box = FALSE)
+venn(df_list_down, zcolor = c("#F37B59","#9590FF", "#00C1AA", "#00ABFD", "#E76BF3"), sncs = 1.2, ilcs = 1.9, box = FALSE)
+```
+
+## gene overlaps in five senescent cell types
+
+```{r, echo=FALSE, fig.height=15, fig.width=8}
+venn(df_list_gene_up, zcolor = c("#F37B59","#9590FF", "#00C1AA", "#00ABFD", "#E76BF3"), sncs = 1.2, ilcs = 1.7, box = FALSE)
+venn(df_list_gene_down, zcolor = c("#F37B59","#9590FF", "#00C1AA", "#00ABFD", "#E76BF3"), sncs = 1.2, ilcs = 1.7, box = FALSE)
+```
+
+```{r, echo=TRUE, fig.height=12, fig.width=8}
+#miRNA upset plot UPREGULATED
+df_list_up$RPTEC <- na.omit(df_list_up$RPTEC)
+listInput_CELL_up <- df_list_up
+
+x_CELL_up <-  upset(fromList(listInput_CELL_up), order.by = "degree", point.size = 3.5, line.size = 2,
+                 mainbar.y.label = "DE microRNAs (FDR < 0.15)", sets.x.label = "DE microRNAs per cell type")
+
+
+miRNAs_cell_up <- x_CELL_up$New_data
+
+rownames(miRNAs_cell_up) <- unique(unlist(listInput_CELL_up))
+core_miRNAs_up <- rownames(miRNAs_cell_up[rowSums(miRNAs_cell_up) > 3,])
+unique_miRNAs_up <- rownames(miRNAs_cell_up[rowSums(miRNAs_cell_up) == 1,])
+
+miRNAs_cell_down[order(rowSums(miRNAs_cell_down), decreasing = TRUE),]
+#miRNA upset plot DOWNREGULATED
+df_list_down$RPTEC <- na.omit(df_list_down$RPTEC)
+listInput_CELL_down <- df_list_down
+
+x_CELL_down <-  upset(fromList(listInput_CELL_down), order.by = "degree", point.size = 3.5, line.size = 2,
+                 mainbar.y.label = "DE microRNAs (FDR < 0.1)", sets.x.label = "DE microRNAs per cell type")
+
+
+miRNAs_cell_down <- x_CELL_down$New_data
+rownames(miRNAs_cell_down) <- unique(unlist(listInput_CELL_down))
+core_miRNAs_down <- rownames(miRNAs_cell_down[rowSums(miRNAs_cell_down) > 3,])
+unique_miRNAs_down <- core_miRNAs_down <- rownames(miRNAs_cell_down[rowSums(miRNAs_cell_down) ==1,])
+
+
+#gene upset plot UPREGULATED
+listInput_gene_up <- df_list_gene_up
+listInput_gene_up <- df_list_gene_up_ENSG
+
+x_gene_up <-  upset(fromList(listInput_gene_up), order.by = "degree", point.size = 3.5, line.size = 2,
+                 mainbar.y.label = "DE microRNAs (FDR < 0.15)", sets.x.label = "DE microRNAs per cell type")
+
+
+gene_cell_up <- x_gene_up$New_data
+
+rownames(gene_cell_up) <- unique(unlist(listInput_gene_up))
+core_gene_up <- rownames(gene_cell_up[rowSums(gene_cell_up) > 3,])
+unique_gene_up <- rownames(gene_cell_up[rowSums(gene_cell_up) == 1,])
+
+#miRNA upset plot DOWNREGULATED
+listInput_gene_down <- df_list_gene_down
+listInput_gene_down <- df_list_gene_down_ENSG
+
+x_gene_down <-  upset(fromList(listInput_gene_down), order.by = "degree", point.size = 3.5, line.size = 2,
+                 mainbar.y.label = "DE microRNAs (FDR < 0.1)", sets.x.label = "DE microRNAs per cell type")
+
+
+gene_cell_down <- x_gene_down$New_data
+rownames(gene_cell_down) <- unique(unlist(listInput_gene_down))
+core_gene_down <- rownames(gene_cell_down[rowSums(gene_cell_down) > 3,])
+unique_gene_down <- rownames(gene_cell_down[rowSums(gene_cell_down) == 1,])
+
+gene_cell_down_unique <- gene_cell_down[rowSums(gene_cell_down) == 1,]
+
+
+write.table(miRNAs_cell_down, "/Users/weiglm/Desktop/SENOMIR/MARKDOWN/miRNAs_cell_down.txt")
+write.table(miRNAs_cell_up, "/Users/weiglm/Desktop/SENOMIR/MARKDOWN/miRNAs_cell_up.txt")
+
+write.table(gene_cell_down, "/Users/weiglm/Desktop/SENOMIR/MARKDOWN/gene_cell_down.txt")
+write.table(gene_cell_up, "/Users/weiglm/Desktop/SENOMIR/MARKDOWN/gene_cell_up.txt")
+
+
+```
+
+```{r, echo=FALSE, fig.height=42, fig.width=8}
+print(x_CELL_up)
+print(x_CELL_down)
+```
+
+#Reanalysis of unsupervised heatmap clustering including the newly generated RPTEC data. Data was filtered for microRNAs detectable with a mean RPM > 10. The top 150 miRNAs according to CV% were used for drawing a heatmap.
+
+```{r, echo = FALSE, results='hide', message=FALSE, warning=FALSE, fig.show='hide'}
+selection <- c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+data_cell <- read.delim("/Users/weiglm/Desktop/SENOMIR/01-NGS-data-analysis/CELL_RPM_RPTEC23_R.txt", header = TRUE, sep = "\t", dec = ".")
+data_cell_raw <- read.delim("/Users/weiglm/Desktop/SENOMIR/01-NGS-data-analysis/CELL_RAW_R.txt", header = TRUE, sep = "\t", dec = ".")
+cols <- c("SampleID", "Cell_type", "Condition", "Matrix")
+data_cell[cols] <- lapply(data_cell[cols], factor)
+
+data_cell$Cell_type <- factor(data_cell$Cell_type, levels=c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC"))
+data_cell$Condition <- factor(data_cell$Condition, levels=c("SIPS", "QUI"))
+
+
+#subset
+data_cell <- data_cell[data_cell$Cell_type %in% selection,]
+data_cell_raw <- data_cell_raw[data_cell_raw$Cell_type %in% selection,]
+colnames(data_cell) = gsub("\\.", "-", colnames(data_cell))
+
+core_miRNAs <- c(unique_miRNAs_down)
+thre_miRNAs_v <- c("SampleID", "Cell_type", "Condition", core_miRNAs)
+#watch out unique gene_up has 3363 genes, the subset dataframe only 2865??? some missing annotations in data_genes
+data_cell_thre <- data_cell[colnames(data_cell) %in% thre_miRNAs_v]
+thre_miRNAs_v_sub <- thre_miRNAs_v[thre_miRNAs_v %in% colnames(data_cell_thre)]
+data_cell_thre <- data_cell_thre[,match(thre_miRNAs_v_sub, colnames(data_cell_thre))]
+
+data_cell_thre <- data_cell_thre[order(data_cell_thre$Condition), ]
+data_cell_thre <- data_cell_thre[order(data_cell_thre$Cell_type), ]
+
+colnames(data_cell_thre) <- str_remove_all(colnames(data_cell_thre), "hsa-")
+colnames(data_cell_thre) <- str_remove_all(colnames(data_cell_thre), "miR-")
+
+
+miRNAs_cell_up_sub <- miRNAs_cell_down[rownames(miRNAs_cell_down) %in% thre_miRNAs_v_sub,]
+asc_length <- length(miRNAs_cell_up_sub[miRNAs_cell_up_sub$miRNA_CELL_ASC == 1,]$miRNA_CELL_ASC)
+hdf_length <- length(miRNAs_cell_up_sub[miRNAs_cell_up_sub$miRNA_CELL_HDF == 1,]$miRNA_CELL_HDF)
+hdmvec_length <- length(miRNAs_cell_up_sub[miRNAs_cell_up_sub$miRNA_CELL_HDMVEC == 1,]$miRNA_CELL_HDMVEC)
+huvec_length <- length(miRNAs_cell_up_sub[miRNAs_cell_up_sub$miRNA_CELL_HUVEC == 1,]$miRNA_CELL_HUVEC)
+rptec_length <- length(miRNAs_cell_up_sub[miRNAs_cell_up_sub$miRNA_CELL_RPTEC == 1,]$miRNA_CELL_RPTEC)
+
+#CREATE HEATMAP
+colors_cell_type <- c("#9590FF", "#F37B59", "#00C1AA", "#00ABFD", "#E76BF3")
+Cell_type <- colors_cell_type[1:length(selection)]
+names(Cell_type) <- selection
+Condition <- c("darkblue", "mediumorchid2")
+names(Condition) <- c("QUI", "SIPS")
+ann_colors <- list(Cell_type = Cell_type, Condition = Condition)
+
+rownames(data_cell_thre) <- data_cell_thre$SampleID
+pos_cell <- data.frame("Cell_type" = data_cell_thre$Cell_type, "Condition" = data_cell_thre$Condition)
+rownames(pos_cell) <- rownames(data_cell_thre)
+
+cell_num <- data_cell_thre[,4:ncol(data_cell_thre)]
+cell_num_scale <- scale(cell_num, center = TRUE, scale = TRUE)
+rownames(cell_num_scale) <- rownames(data_cell_thre)
+
+#cell_heat <- as.ggplot(pheatmap(t(cell_num_scale), 
+#                                annotation_col = pos_cell, 
+#                                annotation_colors = ann_colors, 
+#                                main = paste("mean_RPM > ",thre," top ",n," microRNAs CV%"), fontsize_row = 6, border_col = "black",
+#                                cellwidth = 6, cellheight = 2.5, clustering_distance_cols = "correlation", 
+#                                clustering_distance_rows = "correlation",
+#                                cluster_rows = TRUE, cluster_cols = TRUE, treeheight_row = 20, treeheight_col = 20,
+#                                show_colnames = FALSE, show_rownames = FALSE,
+#                                color = viridis(7)))
+
+column_ha = HeatmapAnnotation(Cell_type = pos_cell$Cell_type, Condition = pos_cell$Condition,
+                              col = list(Cell_type = ann_colors$Cell_type,
+                                         Condition = ann_colors$Condition),
+                              gp = gpar(col = "black"),
+                              simple_anno_size = unit(0.4, "cm"))
+
+row_split = rep("ASC", asc_length)
+row_split[(asc_length + 1):(asc_length+hdf_length)] = "HDF"
+row_split[(asc_length+hdf_length+1):(asc_length+hdf_length+hdmvec_length)] = "HDMVEC"
+row_split[(asc_length+hdf_length+hdmvec_length+1):(asc_length+hdf_length+hdmvec_length+huvec_length)] = "HUVEC"
+row_split[(asc_length+hdf_length+hdmvec_length+huvec_length+1):(asc_length+hdf_length+hdmvec_length+huvec_length+rptec_length)] = "RPTEC"
+
+#row_split = rep("Upregulated", length(core_miRNAs_up))
+#row_split[(length(core_miRNAs_up) + 1):(length(core_miRNAs))] = "Downregulated"
+
+column_split = rep("ASC", 6)
+column_split[7:12] = "HDF"
+column_split[13:18] = "HDMVEC"
+column_split[19:24] = "HUVEC"
+column_split[25:30] = "RPTEC"
+
+#column_split = rep("SIPS", 15)
+#column_split[16:30] = "QUI"
+
+
+cell_heat <- Heatmap(t(cell_num_scale), top_annotation = column_ha, show_column_names = FALSE, show_row_names = FALSE, cluster_columns = FALSE, cluster_rows = FALSE,
+        col = viridis(7), width = unit(7.1, "cm"), height = unit(17, "cm"), clustering_distance_columns = "pearson", column_split = column_split, row_split = row_split,
+        clustering_distance_rows = "pearson", border_gp = gpar(col = "black", lty = 1), heatmap_legend_param = list(legend_height = unit(7, "cm"), legend_width = unit(4, "cm"), title = 'z-score'), row_names_gp = grid::gpar(fontsize = 6.5))
+
+print(cell_heat)
+png(file="/Users/weiglm/Desktop/SENOMIR/MARKDOWN/miRNA_heatmap_intra.png", width=350, height=850)
+print(cell_heat)
+dev.off()
+
+
+```
+```{r plot_2, echo=FALSE, fig.height=14, fig.width=18}
+print(cell_heat)
+
+
+
+```
+
+
+
+## Heatmaps on cell type specific & regulated
+```{r, echo = FALSE, results='hide', message=FALSE, warning=FALSE, fig.show='hide'}
+data_genes <- read.delim("/Users/weiglm/Desktop/SENOMIR/01-NGS-data-analysis/03-correlation-miRNA-genes/senomiR_NGS_genes_RPTEC23.txt", header = TRUE, sep = "\t", dec = ".")
+
+cols_genes <- c("Sample_ID", "Cell_type", "Condition")
+data_genes$Sample_ID <- as.factor(data_genes$Sample_ID)
+data_genes$Cell_type <- as.factor(data_genes$Cell_type)
+data_genes$Cell_type <- factor(data_genes$Cell_type, levels=c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC"))
+data_genes$Condition <- as.factor(data_genes$Condition)
+data_genes$Condition <- factor(data_genes$Condition, levels=c("SIPS", "QUI"))
+#data_genes[cols_genes] <- lapply(data_genes[cols], factor)
+selection <- c("ASC", "HDF", "HDMVEC", "HUVEC", "RPTEC")
+data_genes <- data_genes[data_genes$Cell_type %in% selection,]
+
+thre_genes_v <- c("Sample_ID", "Cell_type", "Condition", unique_gene_up)
+#watch out unique gene_up has 3363 genes, the subset dataframe only 2865??? some missing annotations in data_genes
+data_genes_thre <- data_genes[colnames(data_genes) %in% thre_genes_v]
+thre_genes_v_sub <- thre_genes_v[thre_genes_v %in% colnames(data_genes_thre)]
+data_genes_thre <- data_genes_thre[,match(thre_genes_v_sub, colnames(data_genes_thre))]
+data_genes_thre <- data_genes_thre[order(data_genes_thre$Condition), ]
+data_genes_thre <- data_genes_thre[order(data_genes_thre$Cell_type), ]
+
+gene_cell_up_sub <- gene_cell_up[rownames(gene_cell_up) %in% thre_genes_v_sub,]
+asc_length <- length(gene_cell_up_sub[gene_cell_up_sub$ASC == 1,]$ASC)
+hdf_length <- length(gene_cell_up_sub[gene_cell_up_sub$HDF == 1,]$HDF)
+hdmvec_length <- length(gene_cell_up_sub[gene_cell_up_sub$HDMVEC == 1,]$HDMVEC)
+huvec_length <- length(gene_cell_up_sub[gene_cell_up_sub$HUVEC == 1,]$HUVEC)
+rptec_length <- length(gene_cell_up_sub[gene_cell_up_sub$RPTEC == 1,]$RPTEC)
+
+#downregulated
+gene_cell_down_sub <- gene_cell_down[rownames(gene_cell_down) %in% thre_genes_v_sub,]
+asc_length <- length(gene_cell_down_sub[gene_cell_down_sub$ASC == 1,]$ASC)
+hdf_length <- length(gene_cell_down_sub[gene_cell_down_sub$HDF == 1,]$HDF)
+hdmvec_length <- length(gene_cell_down_sub[gene_cell_down_sub$HDMVEC == 1,]$HDMVEC)
+huvec_length <- length(gene_cell_down_sub[gene_cell_down_sub$HUVEC == 1,]$HUVEC)
+rptec_length <- length(gene_cell_down_sub[gene_cell_down_sub$RPTEC == 1,]$RPTEC)
+
+
+
+#make df out of list with cv and sort from high to low
+#top n miRNAs to be used
+
+rownames(data_genes_thre) <- data_genes_thre$Sample_ID
+
+pos_genes <- data.frame("Cell_type" = data_genes_thre$Cell_type, "Condition" = data_genes_thre$Condition)
+rownames(pos_genes) <- rownames(data_genes_thre)
+
+genes_num <- data_genes_thre[,4:ncol(data_genes_thre)]
+genes_num_scale <- scale(genes_num)
+rownames(genes_num_scale) <- rownames(data_genes_thre)
+
+colors_cell_type_gene <- c("#9590FF", "#00C1AA", "#F37B59","#00ABFD", "#E76BF3")
+Cell_type <- colors_cell_type_gene[1:length(selection)]
+names(Cell_type) <- unique(data_genes_thre$Cell_type)
+Condition <- c("darkblue", "mediumorchid2")
+names(Condition) <- c("QUI", "SIPS")
+ann_colors_gene <- list(Cell_type = Cell_type, Condition = Condition)
+
+column_ha_gene = HeatmapAnnotation(Cell_type = data_genes_thre$Cell_type, Condition = data_genes_thre$Condition,
+                              col = list(Cell_type = ann_colors_gene$Cell_type,
+                                         Condition = ann_colors_gene$Condition),
+                              gp = gpar(col = "black"),
+                              simple_anno_size = unit(0.4, "cm"))
+
+
+row_split = rep("ASC", asc_length)
+row_split[(asc_length + 1):(asc_length+hdf_length)] = "HDF"
+row_split[(asc_length+hdf_length+1):(asc_length+hdf_length+hdmvec_length)] = "HDMVEC"
+row_split[(asc_length+hdf_length+hdmvec_length+1):(asc_length+hdf_length+hdmvec_length+huvec_length)] = "HUVEC"
+row_split[(asc_length+hdf_length+hdmvec_length+huvec_length+1):(asc_length+hdf_length+hdmvec_length+huvec_length+rptec_length)] = "RPTEC"
+
+column_split = rep("ASC", 6)
+column_split[7:12] = "HDF"
+column_split[13:18] = "HDMVEC"
+column_split[19:24] = "HUVEC"
+column_split[25:30] = "RPTEC"
+
+gene_heat <- Heatmap(t(genes_num_scale), top_annotation = column_ha_gene, show_column_names = TRUE, show_row_names = FALSE, cluster_rows = FALSE, cluster_columns = FALSE,
+        col = viridis(7), width = unit(7.1, "cm"), height = unit(18, "cm"), clustering_distance_columns = "pearson", row_split = row_split, column_split = column_split,
+        clustering_distance_rows = "pearson", border_gp = gpar(col = "black", lty = 1), heatmap_legend_param = list(legend_height = unit(7, "cm"), legend_width = unit(4, "cm"), title = 'z-score'))
+
+
+genes_df <- genes_num_scale[complete.cases(genes_num_scale),]
+
+png(file="/Users/weiglm/Desktop/SENOMIR/MARKDOWN/miRNA_heatmap_intra_unique.png", width=650, height=1300)
+print(gene_heat)
+dev.off()
+
+print(gene_heat)
+
+```
+
+```{r}
+miR_families <- read.delim("/Users/weiglm/Desktop/SENOMIR/MARKDOWN/miR_family_info.txt", header = TRUE, sep = "\t", dec = ".")
+miR_families_hsa <- miR_families[str_detect(miR_families$MiRBase.ID, "hsa-"),]
+miR_targets <- read.delim("/Users/weiglm/Desktop/SENOMIR/MARKDOWN/Predicted_Targets_Info.default_predictions.txt", header = TRUE, sep = "\t", dec = ".")
+
+list_df_families_up <- list()
+list_family_seed_up <- list()
+list_family_up <- list()
+list_df_family_up_conserved <- list()
+list_family_up_conserved <- list()
+for (i in selection) {
+  list_df_families_up[[i]] <- miR_families_hsa[miR_families_hsa$MiRBase.ID %in% df_list_up[[i]],]
+  list_family_seed_up[[i]] <- as.data.frame(cbind(unique(list_df_families_up[[i]]$miR.family), unique(list_df_families_up[[i]]$Seed.m8)))
+  colnames(list_family_seed_up[[i]]) <- c("miR.family", "Seed.m8")
+  list_family_up[[i]] <- unique(list_df_families_up[[i]]$miR.family)
+  list_df_family_up_conserved[[i]] <- list_df_families_up[[i]][list_df_families_up[[i]]$Family.Conservation. == "1" | list_df_families_up[[i]]$Family.Conservation. == "2",]
+  list_family_up_conserved[[i]] <- unique(list_df_family_up_conserved[[i]]$miR.family)
+}
+
+
+core_families_up <- miR_families_hsa[miR_families_hsa$MiRBase.ID %in% core_miRNAs_up,]
+core_families_up_targets <- unique(miR_targets[miR_targets$miR.Family %in% core_families_up$miR.family,]$Gene.Symbol)
+#there are some NAs for IDs that are not converted, need to double check those as well in the target list
+core_gene_up_symbol <- gconvert(core_gene_up, organism="hsapiens",target="ENTREZGENE", filter_na=FALSE)
+core_gene_up_target <- core_families_up_targets[core_families_up_targets %in% core_gene_up_symbol$target]
+
+list_df_families_down <- list()
+list_family_seed_down <- list()
+list_family_down <- list()
+for (i in selection) {
+  list_df_families_down[[i]] <- miR_families_hsa[miR_families_hsa$MiRBase.ID %in% df_list_down[[i]],]
+  list_family_seed_down[[i]] <- as.data.frame(cbind(unique(list_df_families_down[[i]]$miR.family), unique(list_df_families_down[[i]]$Seed.m8)))
+  colnames(list_family_seed_down[[i]]) <- c("miR.family", "Seed.m8")
+  list_family_down[[i]] <- unique(list_df_families_down[[i]]$miR.family)
+}
+
+core_families_down <- miR_families_hsa[miR_families_hsa$MiRBase.ID %in% core_miRNAs_down,]
+
+venn(list_family_up, zcolor = "style", sncs = 1.2, ilcs = 1.3, box = FALSE)
+venn(list_family_down, zcolor = "style", sncs = 1.2, ilcs = 1.3, box = FALSE)
+
+
+```
+```{r}
+#import data
+library(data.table)
+
+#Prepare miRNA data
+data_miRNA <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/miRNA_RPM_in_vitro.txt", header = TRUE, sep = "\t", dec = ".")
+df_1 <- data_miRNA[2:ncol(data_miRNA)]
+miRNA_t <- transpose(df_1)
+#redefine row and column names
+rownames(miRNA_t) <- colnames(df_1)
+colnames(miRNA_t) <- data_miRNA$microRNA
+SampleID <- rownames(miRNA_t)
+miRNA_t <- cbind(SampleID, miRNA_t)
+
+#Prepare mRNA data
+data_genes <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/mRNA_RPM_in_vitro.txt", header = TRUE, sep = "\t", dec = ".")
+data_genes_names <- read.delim("/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/mRNA_RPM_in_vitro.txt", header = TRUE, sep = "\t", dec = ".")
+t_1 <- data_genes[3:(ncol(data_genes)-1)]
+#transpose data frame
+df_t <- transpose(t_1)
+#redefine row and column names
+rownames(df_t) <- colnames(t_1)
+colnames(df_t) <- data_genes$gene
+SampleID <- rownames(df_t)
+df_t <- cbind(SampleID, df_t)
+
+#assign DFs for downstream analysis
+data_miRNA <- miRNA_t
+data_genes <- df_t
+
+data_miRNA$SampleID <- as.factor(data_miRNA$SampleID)
+data_genes$SampleID <- as.factor(data_genes$SampleID)
+
+#sort according to mean rpm and get list with means for miRNAs/genes
+#miRNA_mean_order <- data_miRNA[5:ncol(data_miRNA)][,order(colMeans(data_miRNA[5:ncol(data_miRNA)], na.rm = TRUE), decreasing = TRUE)]
+#miRNA_mean_v <- c("SampleID", "Cell_type", "Condition", colnames(miRNA_mean_order))
+#data_miRNA <- data_miRNA[miRNA_mean_v]
+#miRNA_mean_list <- colMeans(data_miRNA[4:ncol(data_miRNA)], na.rm = TRUE)
+
+#genes_mean_order <- data_genes[4:ncol(data_genes)][,order(colMeans(data_genes[4:ncol(data_genes)], na.rm = TRUE), decreasing = TRUE)]
+#genes_mean_v <- c("Sample_ID", "Cell_type", "Condition", colnames(genes_mean_order))
+#data_genes <- data_genes[genes_mean_v]
+#genes_mean_list <- colMeans(data_genes[4:ncol(data_genes)], na.rm = TRUE)
+
+#extract miRNAs/genes with average RPM above threshold (thre) - extracted dataframes get extension "_thre"
+#thre <- 0
+#thre_miRNA_v <- c("SampleID", "Cell_type", names(miRNA_mean_list[miRNA_mean_list > thre]))
+#data_miRNA_thre <- data_miRNA %>% select(all_of(thre_miRNA_v))
+#thre_genes_v <- c("Sample_ID", "Cell_type", names(genes_mean_list[genes_mean_list > thre]))
+#data_genes_thre <- data_genes %>% select(all_of(thre_genes_v))
+
+
+#combine miRNA and genes df
+#data <- cbind(data_miRNA_thre, data_genes_thre[3:ncol(data_genes_thre)])
+
+#remove rows with NAs ###maybe include later
+#data <- na.omit(data) ###
+#select significant miRNAs + genes ###maybe include later
+
+####CREATE CORRELATION MATRIX OF MIRNAS AND GENES
+##corr.test for calculating correlation matrix of miRNAs + genes and getting adjusted p values
+#subset dfs to be used for correlation
+
+#core_miRNAs_up <- str_replace_all(core_miRNAs_up, "-", ".")
+#core_gene_down <- str_replace_all(core_gene_down, "-", ".")
+#core_miRNAs_down <- str_replace_all(core_miRNAs_down, "-", ".")
+#core_gene_up <- str_replace_all(core_gene_up, "-", ".")
+
+data_miRNA <- data_miRNA[order(data_miRNA$SampleID),]
+data_genes <- data_genes[order(data_genes$SampleID),]
+
+df_miRNAs_up <- as.matrix(data_miRNA %>% select(all_of(core_miRNAs_up)))
+#df_miRNAs_up_all <- as.matrix(data_miRNA %>% select(all_of(rownames(miRNAs_cell_up))))
+df_genes_down <- as.matrix(data_genes %>% select(all_of(core_gene_down)))
+#df_genes_down_all <- as.matrix(data_genes %>% select(all_of(rownames(gene_cell_down))))
+
+df_miRNAs_down <- as.matrix(data_miRNA %>% select(all_of(core_miRNAs_down)))
+df_genes_up <- as.matrix(data_genes %>% select(all_of(core_gene_up)))
+
+#run correlation
+r_up_down <- corr.test(df_miRNAs_up, df_genes_down, use = "pairwise",method="pearson",adjust="holm", 
+          alpha=.05,ci=TRUE,minlength=5,normal=TRUE)
+
+r_down_up <- corr.test(df_miRNAs_down, df_genes_up, use = "pairwise",method="pearson",adjust="holm", 
+          alpha=.05,ci=TRUE,minlength=5,normal=TRUE)
+
+list_1 <- flattenCorrMatrix_adapt(r_up_down$r, r_up_down$p.adj)
+list_2 <- flattenCorrMatrix_adapt(r_down_up$r, r_down_up$p.adj)
+selection_cor_1 <- list_1[list_1$p < 0.2,]
+selection_cor_2 <- list_2[list_2$p < 0.2,]
+
+gene_names_1 <- data.frame("ENSEMBL" = data_genes_names[data_genes_names$gene %in% selection_cor_1$gene,]$gene,
+                      "SYMBOL" = data_genes_names[data_genes_names$gene %in% selection_cor_1$gene,]$external_gene_name)
+gene_names_2 <- data.frame("ENSEMBL" = data_genes_names[data_genes_names$gene %in% selection_cor_2$gene,]$gene,
+                      "SYMBOL" = data_genes_names[data_genes_names$gene %in% selection_cor_2$gene,]$external_gene_name)
+
+v_1 <- rep(NA, nrow(selection_cor_1))
+for (y in 1:length(v_1)) {
+  v_1[y] <- gene_names_1[selection_cor_1[y,]$gene == gene_names_1$ENSEMBL,]$SYMBOL
+}
+
+v_2 <- rep(NA, nrow(selection_cor_2))
+for (y in 1:length(v_2)) {
+  v_2[y] <- gene_names_2[selection_cor_2[y,]$gene == gene_names_2$ENSEMBL,]$SYMBOL
+}
+
+selection_cor_1 <- cbind(v_1, selection_cor_1)
+selection_cor_2 <- cbind(v_2, selection_cor_2)
+
+selection_cor_1$microRNA <- str_remove_all(selection_cor_1$microRNA, "hsa-")
+selection_cor_2$microRNA <- str_remove_all(selection_cor_2$microRNA, "hsa-")
+#selection_cor_1$microRNA <- gsub("\\.", "-", selection_cor_1$microRNA)
+#selection_cor_2$microRNA <- gsub("\\.", "-", selection_cor_2$microRNA)
+table(selection_cor_2$v_2)
+
+write.csv(selection_cor_1, "/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/miRNA_up_gene_down_cor_SHOW.csv", row.names=FALSE)
+write.csv(selection_cor_2, "/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/miRNA_down_gene_up_cor_SHOW.csv", row.names=FALSE)
+
+write.table(selection_cor_1, file = "/Users/weiglm/Desktop/SENOMIR/14-Manuscript/DATA/miRNA_up_gene_down_cor_FINAL.txt", sep = "\t",
+            row.names = FALSE)
+
+```
+
+```{r}
+
+
+plot <- ggplot(data_genes, aes(x=Condition, y=INHBA, fill=Condition)) + 
+  geom_boxplot(width = 0.9, lwd = 1.3, fill = "white") + geom_dotplot(binaxis = 'y', stackdir = 'center', position = "dodge", dotsize = 1.3, stroke = 3.2) +
+  scale_fill_manual(values = c("#529EFF", "#C77CFF")) + scale_x_discrete(labels = c("QUI", "SIPS")) +
+  ggtitle("INHBA") + theme(plot.title = element_text(size=20, face="bold", hjust=0.5)) +
+  theme(axis.text.x = element_text(face="plain", color="black", size=20, angle = 90)) +
+  theme(axis.text.y = element_text(face="plain", color="black", size=17)) +
+  theme(legend.position = "none", legend.title = element_text(color="black", size=18, face="bold"), legend.text = element_text(color="black", size=18)) +
+  theme(axis.title.x = element_text(color = "white", size =15, face = "bold"),axis.title.y = element_text(color = "black", size =18, face = "plain")) +
+  scale_y_continuous(name="RPM", limits = c()) + theme(legend.key.size = unit(1.3, "cm")) +
+  theme(strip.text= element_text(size=14, face="plain"), 
+        panel.border = element_rect(colour = "black", fill = NA, size = 2),
+        panel.background = element_rect(fill = "white"),
+        panel.grid.major = element_line(size = 0.5, linetype = "dashed", colour = "lightgrey"),
+        panel.grid.minor = element_line(size = 0.5, linetype = "dashed", colour = "lightgrey")) +
+  theme(strip.background = element_rect(color = "white", fill = "white", size = 1.5, linetype = "solid")) + facet_wrap(~ Cell_type, nrow = 1, scales = "free")
+
+```
+
+```{r, echo=TRUE, fig.height=5, fig.width=8}
+
+print(plot)
+
+```
+
+```{r}
+gse <- gseGO(gene_list,
+             ont = "BP",
+             keyType = "ENSEMBL",
+             OrgDb = "org.Hs.eg.db",
+             eps = 1e-300)
+```
+
+```{r}
+as.data.frame(gse)
+```
+
+
+```{r}
+fit <- gseaplot(gse, geneSetID = 1)
+png("gsea.png", res = 250, width = 2000, height = 1300)
+print(fit)
+dev.off()
+fit
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

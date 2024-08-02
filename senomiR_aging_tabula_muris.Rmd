@@ -1,0 +1,376 @@
+---
+title: "aging_muris_senis_targets"
+output: html_document
+date: "2023-07-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(DESeq2)
+library(stringr)
+library(ggplot2)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+load("/Users/weiglm/Desktop/SENOMIR/MARKDOWN/MACA_Bulk_deseq2_results.bin")
+
+#load targetscan miR_family data
+miR_families <- read.delim("/Users/weiglm/Desktop/SENOMIR/MARKDOWN/miR_family_info.txt", header = TRUE, sep = "\t", dec = ".")
+miR_families_mmu <- miR_families[str_detect(miR_families$MiRBase.ID, "mmu-"),]
+
+miR_targets <- read.delim("/Users/weiglm/Desktop/SENOMIR/MARKDOWN/Predicted_Targets_Info.default_predictions.txt", header = TRUE, sep = "\t", dec = ".")
+
+brain_edgeR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/01-edgeR-stats/brain_edgeR.txt", header = TRUE, sep = "\t", dec = ".")
+epi_edgeR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/01-edgeR-stats/epi_edgeR.txt", header = TRUE, sep = "\t", dec = ".")
+kidney_edgeR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/01-edgeR-stats/kidney_edgeR.txt", header = TRUE, sep = "\t", dec = ".")
+liver_edgeR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/01-edgeR-stats/liver_edgeR.txt", header = TRUE, sep = "\t", dec = ".")
+lung_edgeR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/01-edgeR-stats/lung_edgeR.txt", header = TRUE, sep = "\t", dec = ".")
+muscle_edgeR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/01-edgeR-stats/muscle_edgeR.txt", header = TRUE, sep = "\t", dec = ".")
+skin_edgeR <- read.delim("/Users/weiglm/Desktop/SENOMIR/03-MAYO/06-NGS-BU2-cohort-NovaSeq/01-edgeR-stats/skin_edgeR.txt", header = TRUE, sep = "\t", dec = ".")
+
+brain_edgeR$miRNA <- as.factor(brain_edgeR$miRNA)
+epi_edgeR$miRNA <- as.factor(epi_edgeR$miRNA)
+kidney_edgeR$miRNA <- as.factor(kidney_edgeR$miRNA)
+liver_edgeR$miRNA <- as.factor(liver_edgeR$miRNA)
+lung_edgeR$miRNA <- as.factor(lung_edgeR$miRNA)
+muscle_edgeR$miRNA <- as.factor(muscle_edgeR$miRNA)
+skin_edgeR$miRNA <- as.factor(skin_edgeR$miRNA)
+
+miR_families_up <- c("let-7-5p/miR-98-5p", "miR-142-5p", "miR-125-5p/351-5p", "miR-146-5p",
+                     "miR-15-5p/16-5p/195-5p/322-5p/497-5p", "miR-29-3p")
+
+miR_targets_mmu <- miR_targets[miR_targets$Species.ID == "10090",]
+miR_targets_let7 <- miR_targets_mmu[miR_targets_mmu$miR.Family == "let-7-5p/miR-98-5p",]$Gene.Symbol
+miR_targets_142_5p <- miR_targets_mmu[miR_targets_mmu$miR.Family == "miR-142-5p",]$Gene.Symbol
+miR_targets_125_5p <- miR_targets_mmu[miR_targets_mmu$miR.Family == "miR-125-5p/351-5p",]$Gene.Symbol
+miR_targets_146_5p <- miR_targets_mmu[miR_targets_mmu$miR.Family == "miR-146-5p",]$Gene.Symbol
+miR_targets_15_5p <- miR_targets_mmu[miR_targets_mmu$miR.Family == "miR-15-5p/16-5p/195-5p/322-5p/497-5p",]$Gene.Symbol
+miR_targets_29_3p <- miR_targets_mmu[miR_targets_mmu$miR.Family == "miR-29-3p",]$Gene.Symbol
+
+df_miR_families_mmu <- data.frame(miR_family = miR_families_mmu$miR.family,
+                                miRNA = miR_families_mmu$MiRBase.ID)
+
+df_edgeR <- list(brain_edgeR, epi_edgeR, kidney_edgeR, 
+                liver_edgeR, lung_edgeR, muscle_edgeR, skin_edgeR)
+
+names(df_edgeR) <- c("Brain", "Fat", "Kidney",
+                     "Liver", "Lung", "Muscle", "Skin")
+
+df_family_up <- list()
+for (i in names(df_edgeR)) {
+  df_family_up[[i]] <- data.frame(miRNA = df_edgeR[[i]][df_edgeR[[i]]$FDR < 0.9 & df_edgeR[[i]]$logFC > 0,]$miRNA,
+                             log2FC = df_edgeR[[i]][df_edgeR[[i]]$FDR < 0.9 & df_edgeR[[i]]$logFC > 0,]$logFC,
+                             baseMean = df_edgeR[[i]][df_edgeR[[i]]$FDR < 0.9 & df_edgeR[[i]]$logFC > 0,]$logCPM,
+                            miR_family = c(rep(NA, length(df_edgeR[[i]][df_edgeR[[i]]$FDR < 0.9 & df_edgeR[[i]]$logFC > 0,]$logCPM))))
+}
+
+for (i in names(df_family_up)) {
+  for (x in c(1:nrow(df_family_up[[i]]))) {
+    df_family_up[[i]]$miR_family[x] <- if(!isEmpty(df_miR_families_mmu[df_miR_families_mmu$miRNA %in% df_family_up[[i]]$miRNA[x],]$miR_family)) {
+                                          df_miR_families_mmu[df_miR_families_mmu$miRNA %in% df_family_up[[i]]$miRNA[x],]$miR_family} else {c(NA)}
+    }
+}
+
+cat_family_up <- data.frame(matrix(NA, ncol = 5, nrow = sum(unlist(lapply(df_family_up, nrow)))))
+y <- 1
+x<- 0
+n <- 0
+for (i in names(df_family_up)) {
+  n <- nrow(df_family_up[[i]])
+  x <- x + n
+  cat_family_up[,1][y:x] <- c(rep(i, nrow((df_family_up[[i]]))))
+  cat_family_up[,2][y:x] <- as.character(unlist(df_family_up[[i]]$miRNA))
+  cat_family_up[,3][y:x] <- c(unlist(df_family_up[[i]]$log2FC))
+  cat_family_up[,4][y:x] <- c(unlist(df_family_up[[i]]$baseMean))
+  cat_family_up[,5][y:x] <- c(unlist(df_family_up[[i]]$miR_family))
+  y <- y + n
+}
+
+colnames(cat_family_up) <- c("Tissue", "miRNA", "log2FC", "baseMean", "miR_family")
+
+#subset core miR families upregulated
+
+cat_family_up_sub <- cat_family_up[cat_family_up$miR_family %in% miR_families_up,]
+
+
+
+#for (i in names(df_edgeR)) {
+#  df_edgeR_up[[i]] <- df_edgeR[[i]][df_edgeR[[i]]$FDR < 0.15 & df_edgeR[[i]]$logFC > 0,]$miRNA
+#}
+
+#extract miRNA targets from MACA bulk data
+tissues <- c("Brain", "Kidney", "Liver", "Skin", "Limb_Muscle", "Lung", "Gonadal_Fat")
+
+x1_tissues <- list()
+x1_let7 <- list()
+x1_142 <- list()
+x1_125 <- list()
+x1_146 <- list()
+x1_15 <- list()
+x1_29 <- list()
+df_let7 <- list()
+df_142 <- list()
+df_125 <- list()
+df_146 <- list()
+df_15 <- list()
+df_29 <- list()
+for (i in tissues) {
+  x1_tissues[[i]] <- results_list_MACA_bulk[[i]]$`27_vs_3`$resall
+  x1_tissues[[i]]$gene_symbol <- toupper(x1_tissues[[i]]$gene_symbol)
+  x1_tissues[[i]] <- x1_tissues[[i]][!is.na(x1_tissues[[i]]$padj),]
+  #x1_tissues[[i]] <- x1_tissues[[i]][x1_tissues[[i]]$padj < 0.2,]
+  x1_let7[[i]] <- x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_let7,]
+  x1_142[[i]] <- x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_142_5p,]
+  x1_125[[i]] <- x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_125_5p,]
+  x1_146[[i]] <- x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_146_5p,]
+  x1_15[[i]] <- x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_15_5p,]
+  x1_29[[i]] <- x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_29_3p,]
+  df_let7[[i]] <- data.frame(gene_ID = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_let7,]$gene_ID,
+                        gene_symbol = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_let7,]$gene_symbol,
+                        baseMean = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_let7,]$baseMean,
+                        log2FC = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_let7,]$log2FoldChange)
+  df_142[[i]] <- data.frame(gene_ID = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_142_5p,]$gene_ID,
+                        gene_symbol = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_142_5p,]$gene_symbol,
+                        baseMean = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_142_5p,]$baseMean,
+                        log2FC = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_142_5p,]$log2FoldChange)
+  df_125[[i]] <- data.frame(gene_ID = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_125_5p,]$gene_ID,
+                        gene_symbol = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_125_5p,]$gene_symbol,
+                        baseMean = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_125_5p,]$baseMean,
+                        log2FC = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_125_5p,]$log2FoldChange)
+  df_146[[i]] <- data.frame(gene_ID = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_146_5p,]$gene_ID,
+                        gene_symbol = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_146_5p,]$gene_symbol,
+                        baseMean = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_146_5p,]$baseMean,
+                        log2FC = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_146_5p,]$log2FoldChange)
+  df_15[[i]] <- data.frame(gene_ID = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_15_5p,]$gene_ID,
+                        gene_symbol = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_15_5p,]$gene_symbol,
+                        baseMean = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_15_5p,]$baseMean,
+                        log2FC = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_15_5p,]$log2FoldChange)
+  df_29[[i]] <- data.frame(gene_ID = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_29_3p,]$gene_ID,
+                        gene_symbol = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_29_3p,]$gene_symbol,
+                        baseMean = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_29_3p,]$baseMean,
+                        log2FC = x1_tissues[[i]][x1_tissues[[i]]$gene_symbol %in% miR_targets_29_3p,]$log2FoldChange)
+  df_let7[[i]] <- df_let7[[i]] %>% mutate(quantile = ntile(baseMean, 4))
+  df_142[[i]] <- df_142[[i]] %>% mutate(quantile = ntile(baseMean, 4))
+  df_125[[i]] <- df_125[[i]] %>% mutate(quantile = ntile(baseMean, 4))
+  df_146[[i]] <- df_146[[i]] %>% mutate(quantile = ntile(baseMean, 4))
+  df_15[[i]] <- df_15[[i]] %>% mutate(quantile = ntile(baseMean, 4))
+  df_29[[i]] <- df_29[[i]] %>% mutate(quantile = ntile(baseMean, 4))
+}
+
+#transform MACA data for each miRNA family into long df
+cat_let7 <- data.frame(matrix(NA, ncol = 5, nrow = sum(unlist(lapply(df_let7, nrow)))))
+y <- 1
+x<- 0
+n <- 0
+for (i in tissues) {
+  n <- nrow(df_let7[[i]])
+  x <- x + n
+  cat_let7[,1][y:x] <- c(rep(i, nrow((df_let7[[i]]))))
+  cat_let7[,2][y:x] <- c(unlist(df_let7[[i]]$gene_symbol))
+  cat_let7[,3][y:x] <- c(unlist(df_let7[[i]]$baseMean))
+  cat_let7[,4][y:x] <- c(unlist(df_let7[[i]]$log2FC))
+  cat_let7[,5][y:x] <- c(unlist(df_let7[[i]]$quantile))
+  y <- y + n
+}
+colnames(cat_let7) <- c("Tissue", "gene_symbol", "baseMean", "log2FC", "quantile")
+cat_let7$Tissue <- recode(cat_let7$Tissue, Limb_Muscle = 'Muscle', 
+                                       Gonadal_Fat = 'Fat',)
+
+cat_142 <- data.frame(matrix(NA, ncol = 5, nrow = sum(unlist(lapply(df_142, nrow)))))
+y <- 1
+x<- 0
+n <- 0
+for (i in tissues) {
+  n <- nrow(df_142[[i]])
+  x <- x + n
+  cat_142[,1][y:x] <- c(rep(i, nrow((df_142[[i]]))))
+  cat_142[,2][y:x] <- c(unlist(df_142[[i]]$gene_symbol))
+  cat_142[,3][y:x] <- c(unlist(df_142[[i]]$baseMean))
+  cat_142[,4][y:x] <- c(unlist(df_142[[i]]$log2FC))
+  cat_142[,5][y:x] <- c(unlist(df_142[[i]]$quantile))
+  y <- y + n
+}
+colnames(cat_142) <- c("Tissue", "gene_symbol", "baseMean", "log2FC", "quantile")
+cat_142$Tissue <- recode(cat_142$Tissue, Limb_Muscle = 'Muscle', 
+                                       Gonadal_Fat = 'Fat',)
+
+cat_125 <- data.frame(matrix(NA, ncol = 5, nrow = sum(unlist(lapply(df_125, nrow)))))
+y <- 1
+x<- 0
+n <- 0
+for (i in tissues) {
+  n <- nrow(df_125[[i]])
+  x <- x + n
+  cat_125[,1][y:x] <- c(rep(i, nrow((df_125[[i]]))))
+  cat_125[,2][y:x] <- c(unlist(df_125[[i]]$gene_symbol))
+  cat_125[,3][y:x] <- c(unlist(df_125[[i]]$baseMean))
+  cat_125[,4][y:x] <- c(unlist(df_125[[i]]$log2FC))
+  cat_125[,5][y:x] <- c(unlist(df_125[[i]]$quantile))
+  y <- y + n
+}
+colnames(cat_125) <- c("Tissue", "gene_symbol", "baseMean", "log2FC", "quantile")
+cat_125$Tissue <- recode(cat_125$Tissue, Limb_Muscle = 'Muscle', 
+                                       Gonadal_Fat = 'Fat',)
+
+cat_146 <- data.frame(matrix(NA, ncol = 5, nrow = sum(unlist(lapply(df_146, nrow)))))
+y <- 1
+x<- 0
+n <- 0
+for (i in tissues) {
+  n <- nrow(df_146[[i]])
+  x <- x + n
+  cat_146[,1][y:x] <- c(rep(i, nrow((df_146[[i]]))))
+  cat_146[,2][y:x] <- c(unlist(df_146[[i]]$gene_symbol))
+  cat_146[,3][y:x] <- c(unlist(df_146[[i]]$baseMean))
+  cat_146[,4][y:x] <- c(unlist(df_146[[i]]$log2FC))
+  cat_146[,5][y:x] <- c(unlist(df_146[[i]]$quantile))
+  y <- y + n
+}
+colnames(cat_146) <- c("Tissue", "gene_symbol", "baseMean", "log2FC", "quantile")
+cat_146$Tissue <- recode(cat_146$Tissue, Limb_Muscle = 'Muscle', 
+                                       Gonadal_Fat = 'Fat',)
+
+cat_15 <- data.frame(matrix(NA, ncol = 5, nrow = sum(unlist(lapply(df_15, nrow)))))
+y <- 1
+x<- 0
+n <- 0
+for (i in tissues) {
+  n <- nrow(df_15[[i]])
+  x <- x + n
+  cat_15[,1][y:x] <- c(rep(i, nrow((df_15[[i]]))))
+  cat_15[,2][y:x] <- c(unlist(df_15[[i]]$gene_symbol))
+  cat_15[,3][y:x] <- c(unlist(df_15[[i]]$baseMean))
+  cat_15[,4][y:x] <- c(unlist(df_15[[i]]$log2FC))
+  cat_15[,5][y:x] <- c(unlist(df_15[[i]]$quantile))
+  y <- y + n
+}
+colnames(cat_15) <- c("Tissue", "gene_symbol", "baseMean", "log2FC", "quantile")
+cat_15$Tissue <- recode(cat_15$Tissue, Limb_Muscle = 'Muscle', 
+                                       Gonadal_Fat = 'Fat',)
+
+cat_29 <- data.frame(matrix(NA, ncol = 5, nrow = sum(unlist(lapply(df_29, nrow)))))
+y <- 1
+x<- 0
+n <- 0
+for (i in tissues) {
+  n <- nrow(df_29[[i]])
+  x <- x + n
+  cat_29[,1][y:x] <- c(rep(i, nrow((df_29[[i]]))))
+  cat_29[,2][y:x] <- c(unlist(df_29[[i]]$gene_symbol))
+  cat_29[,3][y:x] <- c(unlist(df_29[[i]]$baseMean))
+  cat_29[,4][y:x] <- c(unlist(df_29[[i]]$log2FC))
+  cat_29[,5][y:x] <- c(unlist(df_29[[i]]$quantile))
+  y <- y + n
+}
+colnames(cat_29) <- c("Tissue", "gene_symbol", "baseMean", "log2FC", "quantile")
+cat_29$Tissue <- recode(cat_29$Tissue, Limb_Muscle = 'Muscle', 
+                                       Gonadal_Fat = 'Fat',)
+
+
+#mir family abundace in senomiR data
+cat_miR_let7 <- cat_family_up_sub[cat_family_up_sub$miR_family %in% "let-7-5p/miR-98-5p",]
+cat_miR_142 <- cat_family_up_sub[cat_family_up_sub$miR_family %in% "miR-142-5p",]
+cat_miR_125 <- cat_family_up_sub[cat_family_up_sub$miR_family %in% "miR-125-5p/351-5p",]
+cat_miR_146 <- cat_family_up_sub[cat_family_up_sub$miR_family %in% "miR-146-5p",]
+cat_miR_15 <- cat_family_up_sub[cat_family_up_sub$miR_family %in% "miR-15-5p/16-5p/195-5p/322-5p/497-5p",]
+cat_miR_29 <- cat_family_up_sub[cat_family_up_sub$miR_family %in% "miR-29-3p",]
+
+cat_let7_bubble <- cbind(aggregate(log2FC~ Tissue+quantile, cat_let7, FUN=mean), aggregate(baseMean~ Tissue+quantile, cat_let7, FUN=mean)[3])
+cat_142_bubble <- cbind(aggregate(log2FC~ Tissue+quantile, cat_142, FUN=mean), aggregate(baseMean~ Tissue+quantile, cat_142, FUN=mean)[3])
+cat_125_bubble <- cbind(aggregate(log2FC~ Tissue+quantile, cat_125, FUN=mean), aggregate(baseMean~ Tissue+quantile, cat_125, FUN=mean)[3])
+cat_146_bubble <- cbind(aggregate(log2FC~ Tissue+quantile, cat_146, FUN=mean), aggregate(baseMean~ Tissue+quantile, cat_146, FUN=mean)[3])
+cat_15_bubble <- cbind(aggregate(log2FC~ Tissue+quantile, cat_15, FUN=mean), aggregate(baseMean~ Tissue+quantile, cat_15, FUN=mean)[3])
+cat_29_bubble <- cbind(aggregate(log2FC~ Tissue+quantile, cat_29, FUN=mean), aggregate(baseMean~ Tissue+quantile, cat_29, FUN=mean)[3])
+
+
+```
+
+```{r}
+
+#making figures
+
+
+g1_let7 <- ggplot(cat_let7_bubble, aes(x = Tissue, y = log2FC)) + geom_violin(trim = FALSE, show.legend = FALSE) +
+  geom_point(aes(colour = factor(quantile)), show.legend = FALSE)
+g1_142 <- ggplot(cat_142_bubble, aes(x = Tissue, y = log2FC)) + geom_violin(trim = FALSE, show.legend = FALSE) +
+  geom_point(aes(colour = factor(quantile)), show.legend = FALSE)
+g1_125 <- ggplot(cat_125_bubble, aes(x = Tissue, y = log2FC)) + geom_violin(trim = FALSE, show.legend = FALSE) +
+  geom_point(aes(colour = factor(quantile)), show.legend = FALSE)
+g1_146 <- ggplot(cat_146_bubble, aes(x = Tissue, y = log2FC)) + geom_violin(trim = FALSE, show.legend = FALSE) +
+  geom_point(aes(colour = factor(quantile)), show.legend = FALSE)
+g1_15 <- ggplot(cat_15_bubble, aes(x = Tissue, y = log2FC)) + geom_violin(trim = FALSE, show.legend = FALSE) +
+  geom_point(aes(colour = factor(quantile)), show.legend = FALSE)
+g1_29 <- ggplot(cat_29_bubble, aes(x = Tissue, y = log2FC)) + geom_violin(trim = FALSE, show.legend = FALSE) +
+  geom_point(aes(colour = factor(quantile)), show.legend = FALSE)
+
+g2_let7 <- ggplot(cat_miR_let7, aes(x=Tissue, y=log2FC)) + geom_boxplot() + geom_point(show.legend = FALSE)
+g2_142 <- ggplot(cat_miR_142, aes(x=Tissue, y=log2FC)) + geom_boxplot() + geom_point(show.legend = FALSE)
+g2_125 <- ggplot(cat_miR_125, aes(x=Tissue, y=log2FC)) + geom_boxplot() + geom_point(show.legend = FALSE)
+g2_146 <- ggplot(cat_miR_146, aes(x=Tissue, y=log2FC)) + geom_boxplot() + geom_point(show.legend = FALSE)
+g2_15 <- ggplot(cat_miR_15, aes(x=Tissue, y=log2FC)) + geom_boxplot() + geom_point(show.legend = FALSE)
+g2_29 <- ggplot(cat_miR_29, aes(x=Tissue, y=log2FC)) + geom_boxplot() + geom_point(show.legend = FALSE)
+
+df <- as.data.frame(x1_tissues$Skin)
+
+ggplot(df, aes(x=log2(baseMean), y=log2FoldChange, color=c(!df$gene_symbol %in% miR_targets_146_5p))) + geom_point(aes(alpha = c(!df$gene_symbol %in% miR_targets_146_5p)), show.legend = FALSE) + scale_color_manual(values = c("red","black")) + scale_alpha_manual(values = c(1, 0.1))
+
+
+```
+
+```{r}
+
+ggarrange(g1_let7, g2_let7, ncol = 1) + ggtitle("let7")
+ggarrange(g1_142, g2_142, ncol = 1) + ggtitle("142")
+ggarrange(g1_125, g2_125, ncol = 1) + ggtitle("125")
+ggarrange(g1_146, g2_146, ncol = 1) + ggtitle("146")
+ggarrange(g1_15, g2_15, ncol = 1) + ggtitle("15")
+ggarrange(g1_29, g2_29, ncol = 1) + ggtitle("29")
+
+
+
+#bubble plot
+
+#let7_bubble <- ggplot(cat_let7_bubble, aes(x = Tissue, y = log2FC, size = baseMean)) +
+#  geom_point(show.legend = FALSE)
+
+
+#g1 <- ggplot(cat_let7, aes(x=Tissue, y=log2FC)) + geom_point() + geom_boxplot() +
+#  facet_wrap(~quantile)
+
+#ggarrange(let7_miR, g1, ncol = 1)
+
+#cat_let7 %>%
+#    mutate(quantile = ntile(baseMean, 4))
+
+#plot_grid(
+#  plot_grid(
+#    cat_let7_bubble
+#    , let7_miR 
+#    , ncol = 1
+#    , align = "hv"))
+
+#plot_grid(let7_bubble, let7_miR, ncol = 1)
+
+
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
